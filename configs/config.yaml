@@ -1,0 +1,129 @@
+defaults:
+  - model: convnext_tiny
+  - loss: combined
+  - optimizer: adamw
+  - scheduler: cosine
+  - augmentation: reid
+  - _self_
+  - experiment: null
+seed: 42
+name: baseline
+output_dir: runs/${name}/fold${data.fold}/${now:%Y%m%d_%H%M%S}
+checkpoint: null
+resume: null
+data:
+  root: /data/projects/ryzhichkin/ReID/data
+  train_csv: ${data.root}/train.csv
+  query_csv: ${data.root}/test_query.csv
+  gallery_csv: ${data.root}/test_gallery.csv
+  image_dir: ${data.root}/images
+  folds_file: artifacts/folds.csv
+  n_folds: 5
+  fold: 0
+  group_column: vehicle_id
+  context_pct: 10.0
+  context_jitter_pct: 0.0
+  image_size: [256, 256]
+  resize_mode: pad
+  num_workers: 8
+  pin_memory: true
+  persistent_workers: false
+  prefetch_factor: 2
+  batch_size_eval: 64
+  verify_files: true
+  sampler:
+    kind: pk
+    identities: 16
+    instances: 4
+    steps_per_epoch: null
+    camera_diverse: true
+  validation:
+    query_per_identity: 1
+    cross_camera: true
+    exclude_all_same_camera: true
+    ranks: [1, 5, 10]
+train:
+  epochs: 40
+  accumulate_grad_batches: 1
+  gradient_clip_val: 5.0
+  freeze_backbone_epochs: 0
+  backbone_lr_multiplier: 0.1
+  layer_decay: 1.0
+  no_weight_decay_bias_norm: true
+  rdrop:
+    enabled: false
+    weight: 0.5
+    temperature: 1.0
+  awp:
+    enabled: false
+    start_epoch: 3
+    lr: 0.01
+    eps: 0.001
+    weight: 0.5
+    parameter_pattern: weight
+  ema:
+    enabled: false
+    decay: 0.999
+    validate: true
+trainer:
+  accelerator: gpu
+  devices: 1
+  strategy: auto
+  precision: bf16-mixed
+  deterministic: true
+  benchmark: false
+  log_every_n_steps: 10
+  check_val_every_n_epoch: 1
+  num_sanity_val_steps: 0
+  limit_train_batches: 1.0
+  limit_val_batches: 1.0
+  max_steps: -1
+  enable_progress_bar: true
+  sync_batchnorm: false
+checkpointing:
+  monitor: val/mAP
+  mode: max
+  save_top_k: 2
+  save_last: true
+eval:
+  split: val
+  weights: auto
+  device: cuda
+  precision: bf16
+  output_dir: ${output_dir}/evaluation
+  top_k: 10
+  save_distances: true
+  tta:
+    enabled: false
+    hflip: true
+    scales: [1.0]
+    rotations: [0]
+    context_pcts: null
+postproc:
+  enabled: false
+  max_dense_gb: 4.0
+  aqe:
+    enabled: false
+    k: 5
+    alpha: 3.0
+    iterations: 1
+    gallery_only: true
+  gallery_aggregation:
+    enabled: false
+    k: 3
+    alpha: 0.7
+    min_similarity: 0.9
+  rerank:
+    kind: none
+    k1: 20
+    k2: 6
+    lambda_value: 0.3
+    device: cpu
+hydra:
+  job:
+    chdir: false
+  run:
+    dir: ${output_dir}/hydra
+  sweep:
+    dir: runs/sweeps/${now:%Y%m%d_%H%M%S}
+    subdir: ${hydra.job.num}

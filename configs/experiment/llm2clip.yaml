@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - override /model: llm2clip
+name: llm2clip
+data:
+  image_size: [336, 336]

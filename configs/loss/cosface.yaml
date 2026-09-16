@@ -1,0 +1,5 @@
+terms:
+  - name: cosface
+    weight: 1.0
+    feature: neck
+    params: {margin: 0.35, scale: 32}

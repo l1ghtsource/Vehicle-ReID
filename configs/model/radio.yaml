@@ -1,0 +1,15 @@
+defaults:
+  - convnext_tiny
+backend: radio
+name: nvidia/C-RADIOv4-SO400M
+revision: c0457f5dc26ca145f954cd4fc5bb6114e5705ad8
+feature_dims: [1152]
+features_only: false
+layout: NLC
+num_prefix_tokens: 0
+drop_path_rate: 0.0
+pooling:
+  kind: gap
+normalization:
+  mean: [0.0, 0.0, 0.0]
+  std: [1.0, 1.0, 1.0]

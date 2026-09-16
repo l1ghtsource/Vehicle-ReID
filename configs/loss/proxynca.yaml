@@ -1,0 +1,7 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.ProxyNCALoss
+    inject_dimensions: true
+    params: {softmax_scale: 3}

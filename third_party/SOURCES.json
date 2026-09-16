@@ -1,0 +1,268 @@
+[
+  {
+    "repo": "https://github.com/Astaxanthin/AdaSP",
+    "commit": "03ba1769c680a72a0137bd2b82265fe389f45fe3",
+    "source": "fastreid/modeling/losses/adasp_loss.py",
+    "dest": "third_party/adasp/adasp_original.py",
+    "sha256": "56449d530debbc6b64e3eafc064b37707ddf3652cb86ac678b2ccbcf0908cef4"
+  },
+  {
+    "repo": "https://github.com/ydwen/opensphere",
+    "commit": "a679e82032455941932e23e3d3cbab6b8c07e3d4",
+    "source": "opensphere/module/head/sphereface2.py",
+    "dest": "third_party/opensphere/sphereface2.py",
+    "sha256": "ed237546120e6431beedf9e243da85ae99b20a0b4c42814b5ff4efbfdbdd2ada"
+  },
+  {
+    "repo": "https://github.com/ydwen/opensphere",
+    "commit": "a679e82032455941932e23e3d3cbab6b8c07e3d4",
+    "source": "opensphere/module/head/common.py",
+    "dest": "third_party/opensphere/common.py",
+    "sha256": "243deee9c2bc8def619d08bbc14ede1b7c036efa8ba63180de8647b93d2ca903"
+  },
+  {
+    "repo": "https://github.com/layumi/Person_reID_baseline_pytorch",
+    "commit": "e08fc0814a4644388ed855544cc347ce7f0813f2",
+    "source": "re_ranking.py",
+    "dest": "third_party/reranking/re_ranking_original.py",
+    "sha256": "57494a73fa791587e36da48c62d340e83aed31ec423f6e7b70ae988ef068ae92"
+  },
+  {
+    "repo": "https://github.com/layumi/Person_reID_baseline_pytorch",
+    "commit": "e08fc0814a4644388ed855544cc347ce7f0813f2",
+    "source": "GPU-Re-Ranking/gnn_reranking.py",
+    "dest": "third_party/reranking/gnn_original.py",
+    "sha256": "574e10d1a290a3439ff2781936b15dc856bad68526310ab28b643ce8bab70cab"
+  },
+  {
+    "repo": "https://github.com/layumi/Person_reID_baseline_pytorch",
+    "commit": "e08fc0814a4644388ed855544cc347ce7f0813f2",
+    "source": "GPU-Re-Ranking/extension/propagation/gnn_propagate_kernel.cu",
+    "dest": "third_party/reranking/gnn_propagate_kernel.cu",
+    "sha256": "23a848e05ce746f0bda2b296cfda6c75416df1b8968213da5499626009b626ae"
+  },
+  {
+    "repo": "https://github.com/microsoft/LLM2CLIP",
+    "commit": "cba3b45ba3d9bdaaf8ad640156dedbdbcb60353a",
+    "source": "llm2clip/eva_clip/eva_vit_model.py",
+    "dest": "third_party/eva_clip/eva_vit_model.py",
+    "sha256": "1a90a50578c91b59241e0af1d6bdc4074ce47866388949540a298e42ed9421a0"
+  },
+  {
+    "repo": "https://github.com/microsoft/LLM2CLIP",
+    "commit": "cba3b45ba3d9bdaaf8ad640156dedbdbcb60353a",
+    "source": "llm2clip/eva_clip/rope.py",
+    "dest": "third_party/eva_clip/rope.py",
+    "sha256": "aa6d1a6459872e5f453d64786ae16bc067c0fd05c8d743e9cec8e9ac61e37a8a"
+  },
+  {
+    "repo": "https://github.com/microsoft/LLM2CLIP",
+    "commit": "cba3b45ba3d9bdaaf8ad640156dedbdbcb60353a",
+    "source": "llm2clip/eva_clip/transformer.py",
+    "dest": "third_party/eva_clip/transformer.py",
+    "sha256": "016d912739ec1fc28857751b75541146e5fb78485efe562c7c65801bd7c48673"
+  },
+  {
+    "repo": "https://github.com/microsoft/LLM2CLIP",
+    "commit": "cba3b45ba3d9bdaaf8ad640156dedbdbcb60353a",
+    "source": "llm2clip/eva_clip/utils.py",
+    "dest": "third_party/eva_clip/utils.py",
+    "sha256": "66f88f6e8695d586068e4b6612b88ed7686efd52e386f8a77b565d13fb148287"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "radio_model.py",
+    "dest": "third_party/radio/radio_model.py",
+    "sha256": "2be659f5cd5b9db9c49db70387b65253c74bc16b3eb86e976f0f693271d4b183"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_module_factory.py",
+    "dest": "third_party/radio/adaptor_module_factory.py",
+    "sha256": "2beac17dc5824c7d9f925dc782cdd4b49bd15cf206bf1cbaa9108a8966e33316"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "feature_normalizer.py",
+    "dest": "third_party/radio/feature_normalizer.py",
+    "sha256": "a74401f5220c2e5960d39addce9ba40f481efca9ab44bb9d96535ed23e1ef62b"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "dual_hybrid_vit.py",
+    "dest": "third_party/radio/dual_hybrid_vit.py",
+    "sha256": "86853ae2ed28c902529cd9b78201350e7dba1cf54ea9e57578241ecc0d88d867"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "cls_token.py",
+    "dest": "third_party/radio/cls_token.py",
+    "sha256": "64ee35f128380c3bb9bc1a913e98ac328220be88964f2092686c637ef866fc79"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "enable_spectral_reparam.py",
+    "dest": "third_party/radio/enable_spectral_reparam.py",
+    "sha256": "b8e703400604ee5f9cdfac0de9b857b7f5126aad8bba03604b04f52f7641d6cb"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "config.json",
+    "dest": "third_party/radio/config.json",
+    "sha256": "6e49e911ff6e980125c208b10ed4b51bb4a92061862cbb8947473f1b33f88fd4"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "hf_model.py",
+    "dest": "third_party/radio/hf_model.py",
+    "sha256": "d28c0a0238ca8854a9af5a9f003761332bfc9182601b3b7466d9242be91ee96f"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_generic.py",
+    "dest": "third_party/radio/adaptor_generic.py",
+    "sha256": "3d1b5a015ff3754a9eb64cd56b4d04cae01e537a1ffa606adaf904c55fff07a1"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "vitdet.py",
+    "dest": "third_party/radio/vitdet.py",
+    "sha256": "5b83b4c7b90b797d854a6da2fd4093ce9210a52533d3f7ba6bf505793b6c68c3"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "open_clip_adaptor.py",
+    "dest": "third_party/radio/open_clip_adaptor.py",
+    "sha256": "c2eb9166de48f5eb5f90f8a750e8ebe67da93698e794dc0bbdab5f013bab8e66"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "eradio_model.py",
+    "dest": "third_party/radio/eradio_model.py",
+    "sha256": "bf76c60b991813eef45c76246cd7dcee3fefbf39bde3d2b6ac8576067012d05f"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "siglip2_adaptor.py",
+    "dest": "third_party/radio/siglip2_adaptor.py",
+    "sha256": "1f40f7d77beefd69ad86aac61b12c82ed915b4012e6bea1628fc8abe80782851"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "input_conditioner.py",
+    "dest": "third_party/radio/input_conditioner.py",
+    "sha256": "72062d3b71877e1469e069cf090e5f35d6ad7abaeb451e56502f7f32dc6c1075"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "extra_timm_models.py",
+    "dest": "third_party/radio/extra_timm_models.py",
+    "sha256": "d7364d5abf5b617782366948f0e593d7a2df275b076094afa1ebc5276a9f7102"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "forward_intermediates.py",
+    "dest": "third_party/radio/forward_intermediates.py",
+    "sha256": "eb5a562d11edc655876eeb95bc1c3b4c7484b963dae41a3f76f7acd2a6906b9e"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "enable_cpe_support.py",
+    "dest": "third_party/radio/enable_cpe_support.py",
+    "sha256": "3c1e3df656960f5c83b38ba5f632fc5b335edf1d6de67731396a865aaa5ce1ed"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "common.py",
+    "dest": "third_party/radio/common.py",
+    "sha256": "6cc79e1f7b61f4917602d2efc9e0a833fa74d60563f6aac74e4625de23723bab"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "utils.py",
+    "dest": "third_party/radio/utils.py",
+    "sha256": "3b83163ce2650ef04973538dd79716ab015d24344ea25d52cfb0c37b093ba4ba"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "vit_patch_generator.py",
+    "dest": "third_party/radio/vit_patch_generator.py",
+    "sha256": "092e9a0b8eca4fee162484ef3ef77b399f686e5e0ffc7be85fb2d69bc2f9ebd9"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "dinov2_arch.py",
+    "dest": "third_party/radio/dinov2_arch.py",
+    "sha256": "5433d08522c28f46a69e710da1a86fc1d76fc03562dbb9b2b49baf5db21195d3"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_mlp.py",
+    "dest": "third_party/radio/adaptor_mlp.py",
+    "sha256": "e75a9ed1f7f58c749dec5a510d699f36f32fdb7f3b61cd8a7e3ccd5afd2c9b77"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "extra_models.py",
+    "dest": "third_party/radio/extra_models.py",
+    "sha256": "a938b96715266d2f65325e56d0d8e42465d23e944e905d2820023472785c55a9"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_attn.py",
+    "dest": "third_party/radio/adaptor_attn.py",
+    "sha256": "baa112b58158d75077e9bba8baba51b2c75f6a6deed2d8046aa5e5f2d5cb669a"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_registry.py",
+    "dest": "third_party/radio/adaptor_registry.py",
+    "sha256": "16963e07de300e5f3cbd5e343aed111d04e4e55a50e07f50ccc2ab930883ea1e"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "enable_damp.py",
+    "dest": "third_party/radio/enable_damp.py",
+    "sha256": "7e2a0b6f8934ac6e4a4768e5ca84cb4ff09ba3726a470f1cf046bd5169b2e334"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "adaptor_base.py",
+    "dest": "third_party/radio/adaptor_base.py",
+    "sha256": "f9d285cc76e70f977f9c78e748f610765f0bd068a13f86d804c07c765cece577"
+  },
+  {
+    "repo": "https://huggingface.co/nvidia/C-RADIOv4-SO400M",
+    "commit": "c0457f5dc26ca145f954cd4fc5bb6114e5705ad8",
+    "source": "preprocessor_config.json",
+    "dest": "third_party/radio/preprocessor_config.json",
+    "sha256": "6ca88d165592015b02a183d26a20fc96748e837d1cb21bde5f611141aca593cf"
+  }
+]

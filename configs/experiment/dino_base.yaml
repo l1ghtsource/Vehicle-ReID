@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+  - override /model: dinov3_convnext_base
+  - override /loss: arcface_adasp
+name: dino_base_adasp
+train:
+  freeze_backbone_epochs: 1
+  ema:
+    enabled: true

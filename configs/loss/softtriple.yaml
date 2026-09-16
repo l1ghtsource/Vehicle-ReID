@@ -1,0 +1,7 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.SoftTripleLoss
+    inject_dimensions: true
+    params: {centers_per_class: 3, la: 20, gamma: 0.1, margin: 0.01}

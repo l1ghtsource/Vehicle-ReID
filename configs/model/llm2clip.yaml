@@ -1,0 +1,15 @@
+defaults:
+  - convnext_tiny
+backend: llm2clip
+name: microsoft/LLM2CLIP-EVA02-L-14-336
+revision: e6a348e3b1448ff6e2b0f6b09c1b8e9343461e4b
+features_only: false
+feature_dims: [1024]
+layout: NLC
+num_prefix_tokens: 1
+drop_path_rate: 0.0
+pooling:
+  kind: cls
+normalization:
+  mean: [0.48145466, 0.4578275, 0.40821073]
+  std: [0.26862954, 0.26130258, 0.27577711]

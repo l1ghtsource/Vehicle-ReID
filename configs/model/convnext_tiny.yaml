@@ -1,0 +1,30 @@
+backend: timm
+name: convnext_tiny.fb_in22k_ft_in1k
+pretrained: true
+revision: null
+local_files_only: false
+checkpoint_path: null
+kwargs: {}
+architecture: null
+features_only: true
+out_indices: [3]
+layout: NCHW
+num_prefix_tokens: 0
+feature_dims: null
+hidden_indices: null
+drop_path_rate: 0.1
+gradient_checkpointing: false
+pooling:
+  kind: gem
+  p: 3.0
+  trainable: true
+  attention_hidden: 128
+head:
+  embedding_dim: 512
+  bnneck: true
+  dropout: 0.0
+  retrieval_feature: neck
+  local_parts: 0
+normalization:
+  mean: [0.485, 0.456, 0.406]
+  std: [0.229, 0.224, 0.225]

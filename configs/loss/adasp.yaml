@@ -1,0 +1,5 @@
+terms:
+  - name: adasp
+    weight: 1.0
+    feature: raw
+    params: {temp: 0.04, loss_type: adasp}

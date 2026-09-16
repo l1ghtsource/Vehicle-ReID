@@ -1,0 +1,47 @@
+# Data and experiment artifacts
+data/
+artifacts/
+runs/
+logs/
+outputs/
+results/
+checkpoints/
+weights/
+multirun/
+tmp/
+*.ckpt
+*.pt
+*.pth
+*.onnx
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+
+# Coverage / test reports
+.coverage
+.coverage.*
+coverage.json
+coverage.xml
+htmlcov/
+
+# Env and local config
+.env
+.env.*
+!.env.example
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+.ipynb_checkpoints/

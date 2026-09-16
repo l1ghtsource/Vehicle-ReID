@@ -1,0 +1,5 @@
+defaults:
+  - convnext_tiny
+name: resnet50.a1_in1k
+out_indices: [4]
+drop_path_rate: 0.0

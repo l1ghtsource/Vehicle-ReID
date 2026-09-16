@@ -1,0 +1,4 @@
+defaults:
+  - dinov3_convnext_base
+hidden_indices: [2, 3, 4]
+feature_dims: [256, 512, 1024]

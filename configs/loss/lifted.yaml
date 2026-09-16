@@ -1,0 +1,6 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.GeneralizedLiftedStructureLoss
+    params: {neg_margin: 1, pos_margin: 0}

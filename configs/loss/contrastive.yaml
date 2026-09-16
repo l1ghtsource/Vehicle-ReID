@@ -1,0 +1,10 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.ContrastiveLoss
+    params: {pos_margin: 0, neg_margin: 1}
+    miner:
+      _target_: pytorch_metric_learning.miners.PairMarginMiner
+      pos_margin: 0.2
+      neg_margin: 0.8

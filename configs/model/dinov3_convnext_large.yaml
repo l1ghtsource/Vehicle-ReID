@@ -1,0 +1,8 @@
+defaults:
+  - dinov3_convnext_base
+name: facebook/dinov3-convnext-large-pretrain-lvd1689m
+feature_dims: [1536]
+architecture:
+  model_type: dinov3_convnext
+  hidden_sizes: [192, 384, 768, 1536]
+  depths: [3, 3, 27, 3]

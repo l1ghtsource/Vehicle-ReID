@@ -1,0 +1,9 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.MultiSimilarityLoss
+    params: {alpha: 2, beta: 50, base: 0.5}
+    miner:
+      _target_: pytorch_metric_learning.miners.MultiSimilarityMiner
+      epsilon: 0.1

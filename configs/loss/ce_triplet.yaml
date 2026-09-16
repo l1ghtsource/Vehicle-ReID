@@ -1,0 +1,9 @@
+terms:
+  - name: ce
+    weight: 1.0
+    feature: neck
+    params: {label_smoothing: 0.1}
+  - name: triplet
+    weight: 1.0
+    feature: raw
+    params: {margin: 0.3, normalize: true, mining: hard}

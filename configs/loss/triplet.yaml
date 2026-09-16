@@ -1,0 +1,5 @@
+terms:
+  - name: triplet
+    weight: 1.0
+    feature: raw
+    params: {margin: 0.3, soft_margin: false, normalize: true, mining: hard}

@@ -1,0 +1,7 @@
+terms:
+  - name: pml
+    weight: 1.0
+    feature: raw
+    target: pytorch_metric_learning.losses.ProxyAnchorLoss
+    inject_dimensions: true
+    params: {margin: 0.1, alpha: 32}

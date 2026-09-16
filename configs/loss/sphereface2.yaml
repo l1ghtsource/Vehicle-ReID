@@ -1,0 +1,5 @@
+terms:
+  - name: sphereface2
+    weight: 1.0
+    feature: neck
+    params: {alpha: 0.7, r: 40.0, m: 0.4, t: 3.0, lw: 50.0}

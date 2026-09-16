@@ -1,0 +1,4 @@
+defaults:
+  - convnext_tiny
+name: swin_base_patch4_window7_224.ms_in22k_ft_in1k
+layout: NHWC

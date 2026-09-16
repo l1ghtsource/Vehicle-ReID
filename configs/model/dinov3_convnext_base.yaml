@@ -1,0 +1,12 @@
+defaults:
+  - convnext_tiny
+backend: hf
+name: facebook/dinov3-convnext-base-pretrain-lvd1689m
+features_only: true
+hidden_indices: [-1]
+feature_dims: [1024]
+drop_path_rate: 0.0
+architecture:
+  model_type: dinov3_convnext
+  hidden_sizes: [128, 256, 512, 1024]
+  depths: [3, 3, 27, 3]

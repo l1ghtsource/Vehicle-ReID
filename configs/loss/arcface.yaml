@@ -1,0 +1,5 @@
+terms:
+  - name: arcface
+    weight: 1.0
+    feature: neck
+    params: {margin: 0.3, scale: 32.0, label_smoothing: 0.0}
