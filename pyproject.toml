@@ -29,6 +29,7 @@ dependencies = [
  "safetensors",
  "tqdm",
  "optuna>=4.5,<5",
+ "optuna-dashboard>=0.17,<1",
 ]
 [project.optional-dependencies]
 dev = ["pytest==8.4.2", "pytest-cov==7.1.0", "ruff==0.15.7", "ty==0.0.81"]

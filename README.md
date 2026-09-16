@@ -472,6 +472,30 @@ study, and child processes are terminated on interruption. Each trial stores sam
 exact Hydra overrides, fold logs, exit codes, metrics, OOF metadata, and OOF embeddings. `best.json`
 always identifies the best completed trial.
 
+### Optuna Dashboard
+
+Use the local dashboard to monitor the running study, compare completed trials, inspect sampled
+parameters, and analyze parameter importance:
+
+```bash
+.venv/bin/optuna-dashboard \
+  sqlite:///artifacts/optuna/convnext_large_all.db
+```
+
+The dashboard is available at `http://127.0.0.1:8080`. For a remote machine, either forward port
+8080 over SSH or expose the service on the machine's network interface:
+
+```bash
+.venv/bin/optuna-dashboard \
+  --host 0.0.0.0 \
+  --port 8080 \
+  sqlite:///artifacts/optuna/convnext_large_all.db
+```
+
+The dashboard can safely read the SQLite study while the search runner is writing new trials.
+Per-epoch fold metrics remain available in
+`artifacts/optuna/<study-name>/trial_<number>/fold<fold>/logs/version_0/metrics.csv`.
+
 ## Quality gates
 
 Run all checks:
