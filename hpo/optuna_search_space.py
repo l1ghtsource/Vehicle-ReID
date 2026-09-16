@@ -1,7 +1,9 @@
 import json
+from pathlib import Path
 from typing import Any
 
 import optuna
+from omegaconf import DictConfig, ListConfig, OmegaConf
 
 LOSS_PRESETS = [
     "combined",
@@ -176,7 +178,7 @@ TRANSFORM_PARAM_SPECS: list[dict[str, tuple[Any, ...]]] = [
         "shear.1": ("int", 1, 10),
         "border_mode": ("categorical", [0, 1, 2, 4]),
     },
-    {"scale.0": ("float", 0.01, 0.08), "scale.1": ("float", 0.08, 0.15)},
+    {"scale.0": ("float", 0.01, 0.05), "scale.1": ("float", 0.06, 0.15)},
     {
         "brightness": ("float", 0.05, 0.4),
         "contrast": ("float", 0.05, 0.4),
@@ -260,9 +262,8 @@ BASE_SPECS: dict[str, tuple[Any, ...]] = {
     "data.context_pct": ("float", 0.0, 30.0),
     "data.context_jitter_pct": ("float", 0.0, 20.0),
     "data.resize_mode": ("categorical", ["pad", "stretch"]),
-    "data.sampler.identities": ("categorical", [8, 12, 16, 20, 24, 32]),
-    "data.sampler.instances": ("categorical", [2, 3, 4, 5, 6, 8]),
-    "data.sampler.steps_per_epoch": ("categorical", [100, 150, 200, 300, 400]),
+    "data.sampler.identities": ("categorical", [8, 12, 16, 20]),
+    "data.sampler.instances": ("categorical", [2, 3, 4]),
     "data.sampler.camera_diverse": ("bool",),
     "train.epochs": ("int", 10, 50),
     "train.gradient_clip_val": ("float", 0.5, 20.0, True),
@@ -271,7 +272,6 @@ BASE_SPECS: dict[str, tuple[Any, ...]] = {
     "train.layer_decay": ("float", 0.6, 1.0),
     "train.no_weight_decay_bias_norm": ("bool",),
     "model.drop_path_rate": ("float", 0.0, 0.4),
-    "model.gradient_checkpointing": ("bool",),
     "model.pooling.p": ("float", 1.0, 6.0),
     "model.pooling.trainable": ("bool",),
     "model.pooling.attention_hidden": ("categorical", [64, 128, 256, 512]),
@@ -528,3 +528,141 @@ def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
     )
     _append(overrides, "postproc.rerank.device", "cpu")
     return overrides
+
+
+def _config_value(cfg: DictConfig | ListConfig, path: str) -> Any:
+    value: Any = cfg
+    for component in path.split("."):
+        value = value[int(component)] if component.isdigit() else value[component]
+    return OmegaConf.to_container(value, resolve=True) if OmegaConf.is_config(value) else value
+
+
+def _loss_name(cfg: DictConfig) -> str:
+    terms = cfg.loss.terms
+    names = [str(term.name) for term in terms]
+    if names == ["arcface", "triplet"]:
+        return "combined"
+    if names == ["arcface", "adasp"]:
+        return "arcface_adasp"
+    if names == ["ce", "triplet"]:
+        return "ce_triplet"
+    if names != ["pml"]:
+        return names[0]
+    target = str(terms[0].target).rsplit(".", maxsplit=1)[-1]
+    miner = str(terms[0].get("miner", {}).get("_target_", "")).rsplit(".", maxsplit=1)[-1]
+    pml_names = {
+        ("TripletMarginLoss", "TripletMarginMiner"): "triplet_semihard",
+        ("TripletMarginLoss", "DistanceWeightedMiner"): "triplet_distanceweighted",
+        ("CircleLoss", ""): "circle",
+        ("MultiSimilarityLoss", "MultiSimilarityMiner"): "multisimilarity",
+        ("SupConLoss", ""): "supcon",
+        ("ProxyAnchorLoss", ""): "proxyanchor",
+        ("ContrastiveLoss", "PairMarginMiner"): "contrastive",
+        ("NTXentLoss", ""): "ntxent",
+        ("ProxyNCALoss", ""): "proxynca",
+        ("SoftTripleLoss", ""): "softtriple",
+        ("FastAPLoss", ""): "fastap",
+        ("GeneralizedLiftedStructureLoss", ""): "lifted",
+    }
+    return pml_names[(target, miner)]
+
+
+def _optimizer_name(cfg: DictConfig) -> str:
+    target = str(cfg.optimizer._target_).rsplit(".", maxsplit=1)[-1].lower()
+    return {"adamw": "adamw", "sgd": "sgd", "lamb": "lamb", "lion": "lion"}[target]
+
+
+def params_from_config(path: Path, model: str) -> dict[str, Any]:
+    loaded = OmegaConf.load(path)
+    if not isinstance(loaded, DictConfig):
+        raise TypeError("Seed configuration must be a mapping")
+    cfg = loaded
+    params = {name: _config_value(cfg, name) for name in BASE_SPECS}
+    params["data.image_size"] = int(cfg.data.image_size[0])
+    params["model.pooling.kind"] = str(cfg.model.pooling.kind)
+    if model not in {"vit", "radio", "llm2clip"}:
+        params["model.head.local_parts"] = int(cfg.model.head.local_parts)
+
+    loss_name = _loss_name(cfg)
+    params["loss"] = loss_name
+    for index in range(LOSS_TERM_COUNTS[loss_name]):
+        params[f"loss.terms.{index}.weight"] = float(cfg.loss.terms[index].weight)
+        params[f"loss.terms.{index}.feature"] = str(cfg.loss.terms[index].feature)
+    for name in LOSS_PARAM_SPECS[loss_name]:
+        params[name] = _config_value(cfg, name)
+    if loss_name not in ADASP_LOSSES:
+        params["data.sampler.kind"] = str(cfg.data.sampler.kind)
+
+    optimizer = _optimizer_name(cfg)
+    params["optimizer"] = optimizer
+    params["optimizer.lr"] = float(cfg.optimizer.lr)
+    params["optimizer.weight_decay"] = float(cfg.optimizer.weight_decay)
+    if optimizer == "sgd":
+        params["optimizer.momentum"] = float(cfg.optimizer.momentum)
+        params["optimizer.nesterov"] = bool(cfg.optimizer.nesterov)
+    else:
+        params["optimizer.beta1"] = float(cfg.optimizer.betas[0])
+        params["optimizer.beta2"] = float(cfg.optimizer.betas[1])
+        if optimizer != "lion":
+            params["optimizer.eps"] = float(cfg.optimizer.eps)
+
+    params["scheduler.kind"] = str(cfg.scheduler.kind)
+    params["scheduler.warmup_epochs"] = int(cfg.scheduler.warmup_epochs)
+    params["scheduler.warmup_start_factor"] = float(cfg.scheduler.warmup_start_factor)
+    params["scheduler.min_lr_ratio"] = float(cfg.scheduler.min_lr_ratio)
+    params["scheduler.milestone_1"] = int(cfg.scheduler.milestones[0])
+    params["scheduler.milestone_2"] = int(cfg.scheduler.milestones[1])
+    params["scheduler.gamma"] = float(cfg.scheduler.gamma)
+
+    if loss_name in CLASSIFIER_LOSSES:
+        params["train.rdrop.enabled"] = bool(cfg.train.rdrop.enabled)
+    params["train.rdrop.weight"] = float(cfg.train.rdrop.weight)
+    params["train.rdrop.temperature"] = float(cfg.train.rdrop.temperature)
+    params["train.awp.enabled"] = bool(cfg.train.awp.enabled)
+    if not cfg.train.awp.enabled:
+        params["train.accumulate_grad_batches"] = int(cfg.train.accumulate_grad_batches)
+    params["train.awp.start_epoch"] = int(cfg.train.awp.start_epoch)
+    params["train.awp.lr"] = float(cfg.train.awp.lr)
+    params["train.awp.eps"] = float(cfg.train.awp.eps)
+    params["train.awp.weight"] = float(cfg.train.awp.weight)
+    params["train.ema.enabled"] = bool(cfg.train.ema.enabled)
+    params["train.ema.decay"] = float(cfg.train.ema.decay)
+    params["train.ema.validate"] = bool(cfg.train.ema.validate)
+
+    for index, specs in enumerate(TRANSFORM_PARAM_SPECS):
+        prefix = f"augmentation.transforms.{index}"
+        params[f"{prefix}.enabled"] = bool(cfg.augmentation.transforms[index].enabled)
+        params[f"{prefix}.p"] = float(cfg.augmentation.transforms[index].p)
+        for suffix in specs:
+            name = f"{prefix}.params.{suffix}"
+            params[name] = _config_value(cfg, name)
+
+    params["eval.tta.enabled"] = bool(cfg.eval.tta.enabled)
+    params["eval.tta.hflip"] = bool(cfg.eval.tta.hflip)
+    scales = list(cfg.eval.tta.scales)
+    params["eval.tta.scale_delta"] = max(abs(float(scale) - 1.0) for scale in scales)
+    rotations = list(cfg.eval.tta.rotations)
+    params["eval.tta.rotation"] = max(abs(int(rotation)) for rotation in rotations)
+    contexts = cfg.eval.tta.context_pcts
+    params["eval.tta.context_pct"] = 0.0 if contexts is None else max(float(value) for value in contexts)
+    if cfg.train.ema.enabled:
+        params["eval.weights"] = "ema" if str(cfg.eval.weights) == "auto" else str(cfg.eval.weights)
+
+    for name in (
+        "postproc.enabled",
+        "postproc.aqe.enabled",
+        "postproc.aqe.k",
+        "postproc.aqe.alpha",
+        "postproc.aqe.iterations",
+        "postproc.aqe.gallery_only",
+        "postproc.gallery_aggregation.enabled",
+        "postproc.gallery_aggregation.k",
+        "postproc.gallery_aggregation.alpha",
+        "postproc.gallery_aggregation.min_similarity",
+        "postproc.rerank.kind",
+        "postproc.rerank.k1",
+        "postproc.rerank.k2",
+        "postproc.rerank.lambda_value",
+    ):
+        params[name] = _config_value(cfg, name)
+    return params

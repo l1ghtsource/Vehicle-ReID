@@ -5,7 +5,9 @@ import os
 import signal
 import subprocess
 import sys
+import time
 from pathlib import Path
+from types import FrameType
 from typing import Any
 
 import numpy as np
@@ -14,7 +16,7 @@ import pandas as pd
 from optuna.samplers import TPESampler
 from optuna.trial import TrialState
 
-from hpo.optuna_search_space import suggest_overrides
+from hpo.optuna_search_space import params_from_config, suggest_overrides
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("reid_optuna")
@@ -36,10 +38,11 @@ def kill_children() -> None:
     for process in CHILDREN:
         if process.poll() is None:
             process.terminate()
+    deadline = time.monotonic() + 15
     for process in CHILDREN:
         if process.poll() is None:
             try:
-                process.wait(timeout=15)
+                process.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 process.kill()
 
@@ -70,7 +73,19 @@ def run_parallel(
             processes.append(process)
             CHILDREN.append(process)
             LOGGER.info("started gpu=%s pid=%s log=%s", gpu, process.pid, log_path)
-        return [process.wait() for process in processes]
+        while True:
+            codes = [process.poll() for process in processes]
+            if all(code is not None for code in codes):
+                return [int(code) for code in codes if code is not None]
+            if any(code not in {None, 0} for code in codes):
+                for process, code in zip(processes, codes, strict=True):
+                    if code is None:
+                        process.terminate()
+                return [
+                    process.wait() if code is None else code
+                    for process, code in zip(processes, codes, strict=True)
+                ]
+            time.sleep(0.25)
     finally:
         CHILDREN.clear()
         for handle in handles:
@@ -155,10 +170,12 @@ def run_trial(
         f"model={model}",
         "model.local_files_only=true",
         f"model.checkpoint_path={checkpoint}",
+        "model.gradient_checkpointing=false",
         "seed=42",
         "checkpoint=null",
         "resume=null",
         "data.n_folds=5",
+        "data.sampler.steps_per_epoch=null",
         "data.num_workers=8",
         "data.pin_memory=true",
         "data.persistent_workers=false",
@@ -217,7 +234,8 @@ def run_trial(
     if has_cuda_oom(train_logs):
         raise optuna.TrialPruned("CUDA OOM during training")
     if any(code != 0 for code in train_codes):
-        raise RuntimeError(f"Training folds failed: {train_codes}")
+        trial.set_user_attr("prune_reason", f"Training folds exited with {train_codes}")
+        raise optuna.TrialPruned(f"Training folds exited with {train_codes}")
 
     eval_commands = []
     eval_logs = []
@@ -245,7 +263,8 @@ def run_trial(
     if has_cuda_oom(eval_logs):
         raise optuna.TrialPruned("CUDA OOM during evaluation")
     if any(code != 0 for code in eval_codes):
-        raise RuntimeError(f"Evaluation folds failed: {eval_codes}")
+        trial.set_user_attr("prune_reason", f"Evaluation folds exited with {eval_codes}")
+        raise optuna.TrialPruned(f"Evaluation folds exited with {eval_codes}")
 
     score, results = save_trial_outputs(trial_dir, metric)
     trial.set_user_attr("trial_dir", str(trial_dir))
@@ -260,8 +279,8 @@ def run_trial(
 def fail_stale_trials(study: optuna.Study) -> int:
     stale = [trial for trial in study.trials if trial.state == TrialState.RUNNING]
     for trial in stale:
-        study.tell(trial.number, state=TrialState.FAIL)
-        LOGGER.warning("marked stale trial %s as failed", trial.number)
+        study.tell(trial.number, state=TrialState.PRUNED)
+        LOGGER.warning("marked stale trial %s as pruned", trial.number)
     return len(stale)
 
 
@@ -294,6 +313,17 @@ def prepare_folds(base_overrides: list[str]) -> None:
     subprocess.run(command, cwd=PROJECT_ROOT, check=True)
 
 
+def seed_run_score(path: Path, metric: str) -> float:
+    summary = json.loads((path / "cv_metrics.json").read_text())
+    return float(summary["metrics"][metric]["query_weighted_mean"])
+
+
+def signal_handler(signum: int, frame: FrameType | None) -> None:
+    LOGGER.warning("received signal %s", signum)
+    kill_children()
+    raise SystemExit(1)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="dinov3_convnext_large")
@@ -310,6 +340,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--storage", type=Path)
     parser.add_argument("--out-dir", type=Path)
     parser.add_argument("--log", type=Path)
+    parser.add_argument("--seed-run", type=Path)
     parser.add_argument("--override", action="append", default=[])
     return parser.parse_args()
 
@@ -341,6 +372,19 @@ def main() -> None:
         sampler=TPESampler(seed=args.seed, multivariate=True),
         load_if_exists=True,
     )
+    if not study.trials and args.seed_run is not None:
+        seed_run = args.seed_run.resolve()
+        seed_config = seed_run / "fold0" / "config.yaml"
+        seed_params = params_from_config(seed_config, args.model)
+        score = seed_run_score(seed_run, args.metric)
+        study.enqueue_trial(
+            seed_params,
+            user_attrs={
+                "seed_run": str(seed_run),
+                "seed_value": score,
+            },
+        )
+        LOGGER.info("enqueued seed run=%s %s=%.8f", seed_run, args.metric, score)
     stale = fail_stale_trials(study)
     done = finished_count(study)
     remaining = max(0, args.n_trials - done)
@@ -357,17 +401,27 @@ def main() -> None:
         return
 
     def objective(trial: optuna.Trial) -> float:
-        return run_trial(
-            trial,
-            args.model,
-            checkpoint,
-            gpus,
-            root,
-            args.metric,
-            args.override,
-        )
+        try:
+            seed_run = trial.user_attrs.get("seed_run")
+            if seed_run is not None:
+                suggest_overrides(trial, args.model)
+                trial.set_user_attr("trial_dir", str(seed_run))
+                return float(trial.user_attrs["seed_value"])
+            return run_trial(
+                trial,
+                args.model,
+                checkpoint,
+                gpus,
+                root,
+                args.metric,
+                args.override,
+            )
+        except Exception as error:
+            trial.set_user_attr("prune_reason", repr(error))
+            LOGGER.exception("trial %s pruned after error", trial.number)
+            raise optuna.TrialPruned(str(error)) from error
 
-    signal.signal(signal.SIGTERM, lambda *_: (kill_children(), sys.exit(1)))
+    signal.signal(signal.SIGTERM, signal_handler)
     try:
         study.optimize(objective, n_trials=remaining, catch=(Exception,))
     except KeyboardInterrupt:

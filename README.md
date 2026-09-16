@@ -472,6 +472,24 @@ study, and child processes are terminated on interruption. Each trial stores sam
 exact Hydra overrides, fold logs, exit codes, metrics, OOF metadata, and OOF embeddings. `best.json`
 always identifies the best completed trial.
 
+Seed a new study with the completed DINOv3 ConvNeXt Base run. Its configuration and query-weighted
+OOF mAP are registered as the first completed Optuna trial without retraining:
+
+```bash
+.venv/bin/python -m hpo.run_optuna_search \
+  --model dinov3_convnext_base \
+  --checkpoint weights/dinov3_base/model.safetensors \
+  --gpus 3,4,5,6,7 \
+  --study-name convnext_base_all \
+  --seed-run runs/cv/dino_base_first \
+  --n-trials 200
+```
+
+Every trial uses the complete dataset epoch with `data.sampler.steps_per_epoch=null`, and gradient
+checkpointing is always disabled. Runtime errors, non-finite runs, and OOM configurations are
+recorded as pruned trials instead of failed trials, allowing the study to continue. Fold workers
+stop immediately when one fold exits unsuccessfully.
+
 ### Optuna Dashboard
 
 Use the local dashboard to monitor the running study, compare completed trials, inspect sampled

@@ -1,4 +1,5 @@
 import argparse
+import contextlib
 import json
 import runpy
 import subprocess
@@ -10,6 +11,7 @@ import numpy as np
 import optuna
 import pandas as pd
 import pytest
+from omegaconf import ListConfig, OmegaConf
 from optuna.trial import TrialState
 
 import hpo.optuna_search_space as search_space
@@ -95,6 +97,63 @@ def test_search_space_helpers():
     assert output == ["x=[1,2]"]
 
 
+def test_seed_params_from_config(cfg, tmp_path):
+    path = tmp_path / "config.yaml"
+    cfg.train.ema.enabled = True
+    cfg.train.epochs = 40
+    cfg.data.image_size = [224, 224]
+    cfg.data.sampler.identities = 8
+    cfg.data.sampler.instances = 2
+    cfg.data.sampler.steps_per_epoch = None
+    cfg.eval.weights = "auto"
+    OmegaConf.save(cfg, path)
+    params = search_space.params_from_config(path, "convnext_tiny")
+    assert params["loss"] == "combined"
+    assert params["optimizer"] == "adamw"
+    assert "model.gradient_checkpointing" not in params
+    assert "data.sampler.steps_per_epoch" not in params
+    assert params["eval.weights"] == "ema"
+    search_space.suggest_overrides(cast(optuna.Trial, optuna.trial.FixedTrial(params)), "convnext_tiny")
+
+    cfg.optimizer = OmegaConf.create(
+        {
+            "_target_": "torch.optim.SGD",
+            "lr": 0.01,
+            "weight_decay": 0.0005,
+            "momentum": 0.9,
+            "nesterov": True,
+        }
+    )
+    cfg.loss = OmegaConf.load("configs/loss/triplet_semihard.yaml")
+    cfg.train.awp.enabled = True
+    cfg.train.ema.enabled = False
+    cfg.eval.tta.context_pcts = [0.0, 10.0]
+    OmegaConf.save(cfg, path)
+    params = search_space.params_from_config(path, "vit")
+    assert params["loss"] == "triplet_semihard"
+    assert params["optimizer"] == "sgd"
+    assert params["eval.tta.context_pct"] == 10.0
+    assert "eval.weights" not in params
+
+    OmegaConf.save(ListConfig([1, 2]), path)
+    with pytest.raises(TypeError, match="mapping"):
+        search_space.params_from_config(path, "vit")
+
+
+def test_loss_name_variants():
+    assert (
+        search_space._loss_name(
+            OmegaConf.create({"loss": {"terms": [{"name": "arcface"}, {"name": "adasp"}]}})
+        )
+        == "arcface_adasp"
+    )
+    assert (
+        search_space._loss_name(OmegaConf.create({"loss": {"terms": [{"name": "ce"}, {"name": "triplet"}]}}))
+        == "ce_triplet"
+    )
+    assert search_space._loss_name(OmegaConf.create({"loss": {"terms": [{"name": "arcface"}]}})) == "arcface"
+
+
 def create_fold_outputs(root, duplicate=False, mismatch=False):
     for fold in range(5):
         directory = root / f"fold{fold}" / "val"
@@ -172,6 +231,17 @@ def test_run_parallel_real_processes(tmp_path):
     assert logs[0].read_text().strip() == "one"
     assert runner.CHILDREN == []
 
+    codes = runner.run_parallel(
+        [
+            [sys.executable, "-c", "raise SystemExit(1)"],
+            [sys.executable, "-c", "import time; time.sleep(10)"],
+        ],
+        [tmp_path / "failed.log", tmp_path / "terminated.log"],
+        [3, 4],
+    )
+    assert codes[0] == 1
+    assert codes[1] != 0
+
 
 class KillProcess:
     def __init__(self, timeout=False):
@@ -224,6 +294,8 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
     assert runner.run_trial(trial, "model", checkpoint, [3, 4, 5, 6, 7], tmp_path, "mAP", []) == 0.75
     overrides = json.loads((tmp_path / "trial_00000" / "overrides.json").read_text())
     assert "data.num_workers=8" in overrides
+    assert "data.sampler.steps_per_epoch=null" in overrides
+    assert "model.gradient_checkpointing=false" in overrides
     assert "trainer.precision=bf16-mixed" in overrides
     assert "checkpointing.monitor=val/mAP" in overrides
 
@@ -233,7 +305,7 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
 
     monkeypatch.setattr(runner, "has_cuda_oom", lambda logs: False)
     monkeypatch.setattr(runner, "run_parallel", lambda commands, logs, gpus: [1, 0, 0, 0, 0])
-    with pytest.raises(RuntimeError, match="Training"):
+    with pytest.raises(optuna.TrialPruned, match="Training"):
         runner.run_trial(trial, "model", checkpoint, [3, 4, 5, 6, 7], tmp_path, "mAP", [])
 
     calls = 0
@@ -244,7 +316,7 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
         return [0] * 5 if calls == 1 else [1, 0, 0, 0, 0]
 
     monkeypatch.setattr(runner, "run_parallel", eval_failure)
-    with pytest.raises(RuntimeError, match="Evaluation"):
+    with pytest.raises(optuna.TrialPruned, match="Evaluation"):
         runner.run_trial(trial, "model", checkpoint, [3, 4, 5, 6, 7], tmp_path, "mAP", [])
 
     calls = 0
@@ -277,7 +349,7 @@ def test_study_helpers_and_best(tmp_path):
     study = optuna.create_study(direction="maximize")
     running = study.ask()
     assert runner.fail_stale_trials(study) == 1
-    assert study.trials[running.number].state == TrialState.FAIL
+    assert study.trials[running.number].state == TrialState.PRUNED
     trial = study.ask()
     study.tell(trial, 0.8)
     assert runner.finished_count(study) == 2
@@ -300,6 +372,16 @@ def test_prepare_folds_and_parse_args(monkeypatch):
     assert args.model == "dinov3_convnext_large"
 
 
+def test_seed_score_and_signal_handler(tmp_path, monkeypatch):
+    (tmp_path / "cv_metrics.json").write_text(json.dumps({"metrics": {"mAP": {"query_weighted_mean": 0.7}}}))
+    assert runner.seed_run_score(tmp_path, "mAP") == 0.7
+    called = []
+    monkeypatch.setattr(runner, "kill_children", lambda: called.append(True))
+    with pytest.raises(SystemExit):
+        runner.signal_handler(15, None)
+    assert called == [True]
+
+
 class MainStudy:
     def __init__(self, interrupt=False, complete=False):
         self.interrupt = interrupt
@@ -307,13 +389,22 @@ class MainStudy:
         self.best_trial = SimpleNamespace(number=1, user_attrs={"trial_dir": "x"})
         self.best_value = 0.9
         self.best_params = {"x": 1}
+        self.queued_attrs = []
         if complete:
             self.trials = [SimpleNamespace(state=TrialState.COMPLETE)]
+
+    def enqueue_trial(self, params, user_attrs):
+        self.queued_attrs.append(user_attrs)
+        self.trials.append(SimpleNamespace(state=TrialState.WAITING))
 
     def optimize(self, objective, n_trials, catch):
         if self.interrupt:
             raise KeyboardInterrupt
-        objective(cast(optuna.Trial, FakeTrial()))
+        trial = FakeTrial()
+        if self.queued_attrs:
+            trial.user_attrs.update(self.queued_attrs.pop(0))
+        with contextlib.suppress(optuna.TrialPruned):
+            objective(cast(optuna.Trial, trial))
 
 
 def args_for_main(tmp_path, **kwargs):
@@ -328,6 +419,7 @@ def args_for_main(tmp_path, **kwargs):
         "storage": tmp_path / "study.db",
         "out_dir": tmp_path / "study",
         "log": tmp_path / "study.log",
+        "seed_run": None,
         "override": [],
     }
     values.update(kwargs)
@@ -349,6 +441,21 @@ def test_main_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: study)
     runner.main()
     assert (args.out_dir / "best.json").exists()
+
+    args.seed_run = tmp_path / "seed"
+    args.seed_run.mkdir()
+    seeded = MainStudy()
+    monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: seeded)
+    monkeypatch.setattr(runner, "params_from_config", lambda path, model: {"x": 1})
+    monkeypatch.setattr(runner, "seed_run_score", lambda path, metric: 0.7)
+    runner.main()
+    assert seeded.trials[0].state == TrialState.WAITING
+    args.seed_run = None
+
+    failing = MainStudy()
+    monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: failing)
+    monkeypatch.setattr(runner, "run_trial", lambda *args: (_ for _ in ()).throw(ValueError("bad")))
+    runner.main()
 
     complete = MainStudy(complete=True)
     monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: complete)
