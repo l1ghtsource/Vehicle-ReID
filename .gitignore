@@ -1,5 +1,6 @@
 # Data and experiment artifacts
 data/
+extra_data/
 artifacts/
 runs/
 logs/
