@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 
 import hydra
@@ -64,6 +65,7 @@ def load_model(cfg):
 def main(cfg):
     model, cfg, checkpoint, choice = load_model(cfg)
     L.seed_everything(cfg.seed, workers=True)
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     torch.use_deterministic_algorithms(bool(cfg.trainer.deterministic))
     device = torch.device(cfg.eval.device)
     model.to(device).eval()

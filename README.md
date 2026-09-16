@@ -431,6 +431,47 @@ The report contains per-metric mean, standard deviation, and query-weighted mean
 IDs are rejected. Embeddings from independently trained folds are not directly comparable and are
 therefore not merged by this utility.
 
+## Hyperparameter optimization
+
+The Optuna search runner trains all five folds concurrently, evaluates every best checkpoint, and
+maximizes the query-weighted OOF retrieval metric:
+
+```bash
+.venv/bin/python -m hpo.run_optuna_search \
+  --model dinov3_convnext_large \
+  --checkpoint weights/dinov3_large/model.safetensors \
+  --gpus 3,4,5,6,7 \
+  --study-name convnext_large_all \
+  --n-trials 200
+```
+
+`hpo/optuna_search_space.py` defines the complete search space. It samples input size and crop
+context, P×K sampling, backbone optimization controls, pooling, head, every supported loss and its
+parameters, optimizer, scheduler, regularization, every augmentation transform and parameter, TTA,
+AQE, gallery aggregation, and reranking. The selected model architecture, checkpoint, five-fold
+protocol, data paths, fold assignment, worker and loader settings, precision, deterministic mode,
+logging, checkpoint policy, metric protocol, and output paths stay fixed so trials remain
+comparable and operational settings do not consume search trials.
+
+Pass data or environment-specific Hydra settings with repeatable `--override` flags:
+
+```bash
+.venv/bin/python -m hpo.run_optuna_search \
+  --model dinov3_convnext_large \
+  --checkpoint /models/dinov3_large/model.safetensors \
+  --study-name convnext_large_all \
+  --override data.root=/datasets/vehicle-reid \
+  --override data.train_csv=/datasets/vehicle-reid/train.csv \
+  --override data.image_dir=/datasets/vehicle-reid/images
+```
+
+The study is persisted in `artifacts/optuna/<study-name>.db`. Repeating the command with the same
+study name and storage resumes it and runs only the missing trials. Interrupted `RUNNING` trials are
+marked failed, CUDA OOM trials are pruned, other fold failures are recorded without terminating the
+study, and child processes are terminated on interruption. Each trial stores sampled parameters,
+exact Hydra overrides, fold logs, exit codes, metrics, OOF metadata, and OOF embeddings. `best.json`
+always identifies the best completed trial.
+
 ## Quality gates
 
 Run all checks:

@@ -8,6 +8,7 @@ EXPERIMENT="${EXPERIMENT:-dino_base}"
 RUN_ROOT="${RUN_ROOT:-runs/cv/${EXPERIMENT}_$(date +%Y%m%d_%H%M%S)}"
 MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-weights/dinov3_base/model.safetensors}"
 GPUS=(3 4 5 6 7)
+export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 
 mkdir -p "$RUN_ROOT"
 "$PYTHON" -m scripts.prepare_folds "$@" >"$RUN_ROOT/folds.log" 2>&1
