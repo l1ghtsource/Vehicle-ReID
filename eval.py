@@ -71,17 +71,23 @@ def main(cfg):
         folds = ensure_folds(cfg)
         if checkpoint.get("data_fingerprint") != fingerprint(folds):
             raise ValueError("Validation data differs from checkpoint dataset")
-        va = folds[folds.fold == cfg.data.fold]
+        va = folds[folds.fold == cfg.data.fold].reset_index(drop=True)
         q, g = query_gallery_split(
             va, cfg.seed, cfg.data.validation.query_per_identity, cfg.data.validation.cross_camera
         )
+        frame = va
+        lookup = pd.Index(frame.image_id)
+        q_indices = lookup.get_indexer(q.image_id)
+        g_indices = lookup.get_indexer(g.image_id)
     elif cfg.eval.split == "test":
         q, g = read_annotations(cfg.data.query_csv), read_annotations(cfg.data.gallery_csv)
         if set(q.image_id) & set(g.image_id):
             raise ValueError("Query/gallery image overlap: define an explicit self-match policy")
+        frame = pd.concat([q, g], ignore_index=True)
+        q_indices = np.arange(len(q))
+        g_indices = np.arange(len(q), len(frame))
     else:
         raise ValueError("eval.split must be val/test")
-    frame = pd.concat([q, g], ignore_index=True)
     contexts = (
         cfg.eval.tta.context_pcts
         if cfg.eval.tta.enabled and cfg.eval.tta.context_pcts
@@ -100,7 +106,7 @@ def main(cfg):
         views.append(embed_loader(model, loader, cfg, device))
     emb = np.stack(views).mean(0)
     emb /= np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
-    qe, ge = emb[: len(q)], emb[len(q) :]
+    qe, ge = emb[q_indices], emb[g_indices]
     distance, expanded_q, expanded_g = postprocess(qe, ge, cfg.postproc)
     out = Path(cfg.eval.output_dir)
     out.mkdir(parents=True, exist_ok=True)
@@ -112,6 +118,10 @@ def main(cfg):
     q.to_csv(out / "query.csv", index=False)
     g.to_csv(out / "gallery.csv", index=False)
     frame[["image_id"]].to_csv(out / "embedding_order.csv", index=False)
+    if cfg.eval.split == "val":
+        oof = frame.copy()
+        oof.insert(0, "embedding_index", np.arange(len(oof)))
+        oof.to_csv(out / "oof.csv", index=False)
     k = min(int(cfg.eval.top_k), len(g))
     order = np.argsort(distance, axis=1, kind="stable")[:, :k]
     sub = pd.DataFrame(

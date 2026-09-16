@@ -70,6 +70,7 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
     train.main.__wrapped__(cfg)
     assert FakeTrainer.instances[-1].kwargs["strategy"] == "ddp_find_unused_parameters_true"
     assert FakeTrainer.instances[-1].fit_args[2] is None
+    assert json.loads((tmp_path / "run/run_summary.json").read_text())["best_checkpoint"] == "best.ckpt"
 
     dm = FakeDataModule(cfg)
     resume = tmp_path / "resume.ckpt"
@@ -170,6 +171,9 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     metadata = json.loads((tmp_path / "val/metrics.json").read_text())
     assert metadata["n_query"] == 2
     assert "metrics" in metadata
+    oof = pd.read_csv(tmp_path / "val/oof.csv")
+    assert len(oof) == len(folds[folds.fold == data_cfg.data.fold])
+    assert np.load(tmp_path / "val/embeddings.npy").shape[0] == len(oof)
 
     data_cfg.eval.split = "test"
     data_cfg.eval.output_dir = str(tmp_path / "test")

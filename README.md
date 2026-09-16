@@ -380,7 +380,44 @@ access.
 
 ## Cross-validation
 
-Train each fold independently. After evaluation, aggregate fold-level metrics:
+Run all five `dino_base` folds in parallel:
+
+```bash
+EXPERIMENT=dino_base scripts/train_folds.sh
+```
+
+The runner uses a fixed GPU assignment:
+
+- Fold 0: physical CUDA device 3.
+- Fold 1: physical CUDA device 4.
+- Fold 2: physical CUDA device 5.
+- Fold 3: physical CUDA device 6.
+- Fold 4: physical CUDA device 7.
+
+Each process sees one GPU through `CUDA_VISIBLE_DEVICES` and runs with `trainer.devices=1`. Existing
+Hugging Face weights are loaded from `weights/dinov3_base/model.safetensors` with
+`model.local_files_only=true`. Override the checkpoint through `MODEL_CHECKPOINT`. Additional Hydra
+overrides can be appended to the command:
+
+```bash
+RUN_ROOT=runs/cv/dino_base_v1 \
+MODEL_CHECKPOINT=/models/dinov3_base/model.safetensors \
+scripts/train_folds.sh \
+  data.root=/datasets/vehicle-reid \
+  train.epochs=30
+```
+
+After every fold finishes, the runner evaluates its best checkpoint on the complete held-out fold,
+prints aggregate retrieval metrics, and writes:
+
+- `cv_metrics.json`: mean, standard deviation, and query-weighted mean across folds.
+- `oof_embeddings.npy`: normalized embeddings for every training image exactly once.
+- `oof.csv`: labels, fold assignments, source rows, and embedding indices.
+- `foldN/run_summary.json`: best and last checkpoint paths.
+- `foldN/val/metrics.json`: retrieval metrics for one fold.
+- Per-fold training and evaluation logs.
+
+To aggregate already completed fold metrics manually:
 
 ```bash
 .venv/bin/python scripts/aggregate_cv.py \

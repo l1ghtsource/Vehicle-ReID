@@ -70,16 +70,13 @@ def main(cfg):
     )
     trainer.fit(model, datamodule=dm, ckpt_path=cfg.resume)
     if trainer.is_global_zero:
-        print(
-            json.dumps(
-                {
-                    "output_dir": str(out),
-                    "best_checkpoint": checkpoint.best_model_path,
-                    "last_checkpoint": checkpoint.last_model_path,
-                },
-                indent=2,
-            )
-        )
+        summary = {
+            "output_dir": str(out),
+            "best_checkpoint": checkpoint.best_model_path,
+            "last_checkpoint": checkpoint.last_model_path,
+        }
+        (out / "run_summary.json").write_text(json.dumps(summary, indent=2))
+        print(json.dumps(summary, indent=2))
 
 
 if __name__ == "__main__":
