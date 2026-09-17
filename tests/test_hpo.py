@@ -495,6 +495,9 @@ def test_prepare_folds_and_parse_args(monkeypatch):
     monkeypatch.setattr(runner.subprocess, "run", lambda command, cwd, check: calls.append(command))
     runner.prepare_folds(["data.root=x"])
     assert "scripts.prepare_folds" in calls[0]
+    monkeypatch.setattr(sys, "argv", ["run_optuna_search"])
+    with pytest.raises(SystemExit):
+        runner.parse_args()
     monkeypatch.setattr(sys, "argv", ["run_optuna_search", "--gpus", "0,1,2,3,4"])
     args = runner.parse_args()
     assert args.model == "dinov3_convnext_large"

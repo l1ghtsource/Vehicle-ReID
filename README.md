@@ -374,6 +374,52 @@ checkpoint without EMA state is an error.
 Evaluation preserves the original query and gallery CSV order. It refuses query/gallery image
 overlap because no implicit self-match policy is assumed.
 
+### Zero-shot pretrained probe
+
+`scripts/zero_shot.py` scores a Hydra model config on 100% of `train.csv` without training. The
+query/gallery split is the same protocol `pretrain.py` uses for extra-data validation: one query per
+identity when a cross-camera positive exists, remaining images as gallery. Random projection,
+BN-neck, and attention pooling are disabled so the pretrained backbone features are used directly.
+GAP pooling is the default; Hydra overrides still apply after those defaults.
+
+Probe DINOv3 ConvNeXt Base from local weights:
+
+```bash
+.venv/bin/python scripts/zero_shot.py dinov3_convnext_base \
+  model.checkpoint_path=weights/dinov3_base/model.safetensors \
+  model.local_files_only=true \
+  eval.device=cuda:2
+```
+
+Run every backbone in `weights/` sequentially on one device. The device is the first argument
+(`cuda:2`, `cuda:0`, and so on). Per-model metrics go to `artifacts/zero_shot/<model>/metrics.json`,
+and a combined file is written to `artifacts/zero_shot/summary.json`:
+
+```bash
+scripts/zero_shot_weights.sh cuda:2
+```
+
+LLM2CLIP is forced to 336 × 336 and CLS pooling. Extra Hydra overrides can follow the device
+argument.
+
+Metrics are written to `artifacts/zero_shot/dinov3_convnext_base/metrics.json` for a single-model
+run. Pass extra Hydra overrides after the model name (`data.root`, `eval.tta.enabled`,
+`postproc.enabled`, and so on).
+
+Measured out-of-the-box retrieval on 100% of competition `train.csv` (1541 queries, 5550 gallery
+images, cross-camera protocol, no TTA or reranking). These scores are a pretrained-backbone probe,
+not identity-disjoint fold OOF:
+
+| Model | mAP | Rank-1 | Rank-5 | Rank-10 | mINP |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| DINOv3 ConvNeXt Base | 0.173 | 0.168 | 0.294 | 0.363 | 0.117 |
+| DINOv3 ConvNeXt Large | 0.189 | 0.175 | 0.323 | 0.412 | 0.136 |
+| RADIO C-RADIOv4-SO400M | 0.171 | 0.176 | 0.295 | 0.360 | 0.112 |
+| LLM2CLIP EVA02-L-14-336 | 0.334 | 0.352 | 0.519 | 0.619 | 0.236 |
+
+LLM2CLIP is the strongest frozen backbone on this probe. ConvNeXt Large is slightly ahead of ConvNeXt
+Base and RADIO, which are close to each other.
+
 ### Test-time augmentation
 
 TTA is configured in `eval.tta`:
@@ -444,29 +490,22 @@ access.
 
 ## Cross-validation
 
-Run all five `dino_base` folds in parallel:
+Run all five `dino_base` folds in parallel. The first argument is the five physical GPU IDs, one
+per fold:
 
 ```bash
-EXPERIMENT=dino_base scripts/train_folds.sh
+EXPERIMENT=dino_base scripts/train_folds.sh 3,4,5,6,7
 ```
-
-The runner uses a fixed GPU assignment:
-
-- Fold 0: physical CUDA device 3.
-- Fold 1: physical CUDA device 4.
-- Fold 2: physical CUDA device 5.
-- Fold 3: physical CUDA device 6.
-- Fold 4: physical CUDA device 7.
 
 Each process sees one GPU through `CUDA_VISIBLE_DEVICES` and runs with `trainer.devices=1`. Existing
 Hugging Face weights are loaded from `weights/dinov3_base/model.safetensors` with
 `model.local_files_only=true`. Override the checkpoint through `MODEL_CHECKPOINT`. Additional Hydra
-overrides can be appended to the command:
+overrides can be appended after the GPU list:
 
 ```bash
 RUN_ROOT=runs/cv/dino_base_v1 \
 MODEL_CHECKPOINT=/models/dinov3_base/model.safetensors \
-scripts/train_folds.sh \
+scripts/train_folds.sh 3,4,5,6,7 \
   data.root=/datasets/vehicle-reid \
   train.epochs=30
 ```
@@ -498,7 +537,8 @@ therefore not merged by this utility.
 ## Hyperparameter optimization
 
 The Optuna search runner trains all five folds concurrently, evaluates every best checkpoint, and
-maximizes the query-weighted OOF retrieval metric:
+maximizes the query-weighted OOF retrieval metric. Pass five GPU IDs with `--gpus`; there is no
+default assignment:
 
 ```bash
 .venv/bin/python -m hpo.run_optuna_search \
@@ -630,7 +670,7 @@ extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 postproc/       Retrieval expansion, aggregation, and reranking
-scripts/        Dataset audit, fold creation, weight download, model checks, and CV aggregation
+scripts/        Dataset audit, fold creation, weight download, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
 third_party/    Vendored upstream implementations
 pretrain.py     Hydra pretraining entrypoint on extra data

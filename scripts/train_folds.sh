@@ -3,11 +3,22 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
+if [[ $# -lt 1 ]]; then
+  echo "usage: $0 <gpu0,gpu1,gpu2,gpu3,gpu4> [hydra overrides...]" >&2
+  exit 1
+fi
+
+IFS=',' read -r -a GPUS <<< "$1"
+shift
+if [[ ${#GPUS[@]} -ne 5 ]]; then
+  echo "Exactly five GPU IDs are required" >&2
+  exit 1
+fi
+
 PYTHON="${PYTHON:-.venv/bin/python}"
 EXPERIMENT="${EXPERIMENT:-dino_base}"
 RUN_ROOT="${RUN_ROOT:-runs/cv/${EXPERIMENT}_$(date +%Y%m%d_%H%M%S)}"
 MODEL_CHECKPOINT="${MODEL_CHECKPOINT:-weights/dinov3_base/model.safetensors}"
-GPUS=(3 4 5 6 7)
 export CUBLAS_WORKSPACE_CONFIG="${CUBLAS_WORKSPACE_CONFIG:-:4096:8}"
 
 mkdir -p "$RUN_ROOT"

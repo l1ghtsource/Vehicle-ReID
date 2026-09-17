@@ -334,7 +334,7 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "weights/dinov3_large/model.safetensors",
     )
-    parser.add_argument("--gpus", default="3,4,5,6,7")
+    parser.add_argument("--gpus", required=True)
     parser.add_argument("--n-trials", type=int, default=100)
     parser.add_argument("--study-name", default="reid_convnext_large")
     parser.add_argument("--metric", default="mAP")

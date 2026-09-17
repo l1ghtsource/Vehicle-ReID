@@ -4,8 +4,10 @@ import sys
 from contextlib import nullcontext
 from pathlib import Path
 
+import numpy as np
 import pytest
 import torch
+from omegaconf import OmegaConf
 from torch import nn
 
 import models
@@ -14,12 +16,24 @@ import scripts.audit_data as audit_data
 import scripts.check_backbone as check_backbone
 import scripts.download_weights as download_weights
 import scripts.prepare_folds as prepare_folds
+import scripts.zero_shot as zero_shot
 
 
 def test_train_folds_forwards_overrides_to_eval():
     script = (Path(__file__).resolve().parents[1] / "scripts/train_folds.sh").read_text()
+    assert "Exactly five GPU IDs are required" in script
     eval_block = script.split('"$PYTHON" eval.py', 1)[1].split("fold_dir/eval.log", 1)[0]
     assert '"$@"' in eval_block
+
+
+def test_zero_shot_weights_script_runs_all_local_backbones():
+    script = (Path(__file__).resolve().parents[1] / "scripts/zero_shot_weights.sh").read_text()
+    assert "eval.device=$DEVICE" in script
+    assert "dinov3_convnext_base" in script
+    assert "dinov3_convnext_large" in script
+    assert "radio" in script
+    assert "llm2clip" in script
+    assert "summary.json" in script
 
 
 def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
@@ -161,6 +175,100 @@ def test_check_backbone_main(tmp_path, monkeypatch):
     monkeypatch.setattr(models, "ReIDModel", SmokeModel)
     monkeypatch.setattr(sys, "argv", ["check_backbone", "convnext_tiny"])
     runpy.run_module("scripts.check_backbone", run_name="__main__")
+
+
+class ProbeModel(nn.Module):
+    def __init__(self, cfg, initialize_pretrained=True):
+        super().__init__()
+        self.cfg = cfg
+        self.initialized = initialize_pretrained
+        self.weight = nn.Parameter(torch.ones(1))
+
+
+def fake_zero_shot_embeddings(model, loader, cfg, device):
+    size = len(loader.dataset)
+    values = np.arange(size * 8, dtype=np.float32).reshape(size, 8) + 1
+    return values / np.linalg.norm(values, axis=1, keepdims=True)
+
+
+def test_zero_shot_main(data_cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(zero_shot, "ReIDModel", ProbeModel)
+    monkeypatch.setattr(zero_shot, "embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr(zero_shot.L, "seed_everything", lambda *args, **kwargs: None)
+    out = tmp_path / "probe"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "zero_shot",
+            "convnext_tiny",
+            f"data.root={data_cfg.data.root}",
+            f"data.train_csv={data_cfg.data.train_csv}",
+            f"data.image_dir={data_cfg.data.image_dir}",
+            "eval.device=cpu",
+            f"eval.output_dir={out}",
+            "eval.tta.enabled=true",
+            "eval.tta.context_pcts=[0,10]",
+            "eval.save_distances=true",
+            "data.num_workers=0",
+            "data.pin_memory=false",
+            "trainer.deterministic=false",
+            "model.pretrained=false",
+        ],
+    )
+    zero_shot.main()
+    metadata = json.loads((out / "metrics.json").read_text())
+    assert metadata["model"] == "convnext_tiny"
+    assert metadata["pretrained"] is False
+    assert "metrics" in metadata
+    assert metadata["n_train"] == 40
+    assert (out / "distances.npy").is_file()
+    saved = OmegaConf.load(out / "config.yaml")
+    assert str(saved.model.pooling.kind) == "gap"
+    assert bool(saved.model.head.bnneck) is False
+
+    second = tmp_path / "probe_default"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "zero_shot",
+            "convnext_tiny",
+            f"data.root={data_cfg.data.root}",
+            f"data.train_csv={data_cfg.data.train_csv}",
+            f"data.image_dir={data_cfg.data.image_dir}",
+            "eval.device=cpu",
+            f"eval.output_dir={second}",
+            "data.num_workers=0",
+            "data.pin_memory=false",
+            "trainer.deterministic=false",
+            "model.pretrained=false",
+        ],
+    )
+    zero_shot.main()
+    assert not (second / "distances.npy").exists()
+    torch.use_deterministic_algorithms(False)
+
+    monkeypatch.setattr(models, "ReIDModel", ProbeModel)
+    monkeypatch.setattr("modules.inference.embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "zero_shot",
+            "convnext_tiny",
+            f"data.root={data_cfg.data.root}",
+            f"data.train_csv={data_cfg.data.train_csv}",
+            f"data.image_dir={data_cfg.data.image_dir}",
+            "eval.device=cpu",
+            f"eval.output_dir={tmp_path / 'probe_main'}",
+            "data.num_workers=0",
+            "data.pin_memory=false",
+            "trainer.deterministic=false",
+            "model.pretrained=false",
+        ],
+    )
+    runpy.run_module("scripts.zero_shot", run_name="__main__")
 
 
 def test_prepare_folds_body_and_main_guard(data_cfg, monkeypatch):
