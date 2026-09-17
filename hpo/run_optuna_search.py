@@ -45,6 +45,7 @@ def kill_children() -> None:
                 process.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait()
 
 
 def run_parallel(
@@ -87,6 +88,7 @@ def run_parallel(
                 ]
             time.sleep(0.25)
     finally:
+        kill_children()
         CHILDREN.clear()
         for handle in handles:
             handle.close()

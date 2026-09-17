@@ -1,6 +1,7 @@
 import argparse
 import contextlib
 import json
+import os
 import runpy
 import subprocess
 import sys
@@ -302,6 +303,35 @@ def test_run_parallel_real_processes(tmp_path):
     assert codes[1] != 0
 
 
+def test_run_parallel_kills_children_on_interrupt(tmp_path, monkeypatch):
+    marker = tmp_path / "pid.txt"
+    interrupted = False
+
+    class InterruptingPopen(subprocess.Popen):
+        def poll(self, *args, **kwargs):
+            nonlocal interrupted
+            code = super().poll(*args, **kwargs)
+            if not interrupted and marker.exists() and code is None:
+                interrupted = True
+                raise KeyboardInterrupt
+            return code
+
+    monkeypatch.setattr(runner.subprocess, "Popen", InterruptingPopen)
+    command = (
+        f"import os, pathlib, time;pathlib.Path({str(marker)!r}).write_text(str(os.getpid()));time.sleep(60)"
+    )
+    with pytest.raises(KeyboardInterrupt):
+        runner.run_parallel(
+            [[sys.executable, "-c", command]],
+            [tmp_path / "child.log"],
+            [0],
+        )
+    assert runner.CHILDREN == []
+    pid = int(marker.read_text())
+    with pytest.raises(OSError):
+        os.kill(pid, 0)
+
+
 class KillProcess:
     def __init__(self, timeout=False):
         self.timeout = timeout
@@ -309,12 +339,16 @@ class KillProcess:
         self.killed = False
 
     def poll(self):
+        if self.killed:
+            return -9
         return None
 
     def terminate(self):
         self.terminated = True
 
     def wait(self, timeout=None):
+        if self.killed:
+            return -9
         if self.timeout:
             raise subprocess.TimeoutExpired("x", float(timeout or 0))
         return 0
