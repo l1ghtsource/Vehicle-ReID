@@ -11,6 +11,8 @@ name: baseline
 output_dir: runs/${name}/fold${data.fold}/${now:%Y%m%d_%H%M%S}
 checkpoint: null
 resume: null
+# Loads model.* weights from a pretrain.py checkpoint. Mutually exclusive with resume.
+init_checkpoint: null
 data:
   root: /data/projects/ryzhichkin/ReID/data
   train_csv: ${data.root}/train.csv

@@ -8,9 +8,8 @@ import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf
-from torch import nn
 
-from dataset import ReIDDataModule
+from dataset import PretrainDataModule
 from dataset.folds import fingerprint
 from modules.lightning_module import ReIDModule
 
@@ -22,35 +21,11 @@ def container_dict(value: Any) -> dict[str, Any]:
     return {str(key): item for key, item in container.items()}
 
 
-def load_initial_weights(module: nn.Module, path: str | Path) -> str:
-    checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    choice = checkpoint.get("validation_weights", "raw")
-    if choice == "ema" and "ema" in checkpoint:
-        state = {f"model.{key}": value for key, value in checkpoint["ema"]["shadow"].items()}
-    else:
-        choice = "raw"
-        state = {key: value for key, value in checkpoint["state_dict"].items() if key.startswith("model.")}
-    try:
-        missing, unexpected = module.load_state_dict(state, strict=False)
-    except RuntimeError as error:
-        raise ValueError(
-            "Initial checkpoint requires the same model, pooling, and head configuration"
-        ) from error
-    missing_model = [key for key in missing if key.startswith("model.")]
-    if missing_model or unexpected:
-        raise ValueError(
-            f"Initial checkpoint model mismatch: missing={missing_model}, unexpected={unexpected}"
-        )
-    return choice
-
-
-@hydra.main(version_base="1.3", config_path="configs", config_name="config")
+@hydra.main(version_base="1.3", config_path="configs", config_name="pretrain")
 def main(cfg):
-    if cfg.resume and cfg.init_checkpoint:
-        raise ValueError("resume and init_checkpoint are mutually exclusive")
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("highest" if cfg.trainer.deterministic else "high")
-    dm = ReIDDataModule(cfg)
+    dm = PretrainDataModule(cfg)
     dm.prepare_data()
     dm.setup("fit")
     out = Path(cfg.output_dir)
@@ -61,21 +36,17 @@ def main(cfg):
     model = ReIDModule(
         cfg,
         dm.num_classes,
-        initialize_pretrained=cfg.resume is None and cfg.init_checkpoint is None,
+        initialize_pretrained=cfg.resume is None,
         data_module=dm,
     )
-    initial_weights = None
-    if cfg.init_checkpoint:
-        initial_weights = load_initial_weights(model, cfg.init_checkpoint)
     if cfg.resume:
         checkpoint = torch.load(cfg.resume, map_location="cpu", weights_only=False)
         if (
             checkpoint.get("data_fingerprint") != fingerprint(dm.folds)
             or checkpoint.get("label_map") != dm.label_map
         ):
-            raise ValueError("Resume checkpoint belongs to different data/fold; refusing unsafe resume")
+            raise ValueError("Resume checkpoint belongs to different pretraining data")
     args = container_dict(cfg.trainer)
-
     partial = args["limit_val_batches"] != 1.0
     checkpoint = ModelCheckpoint(
         dirpath=out / "checkpoints",
@@ -98,10 +69,14 @@ def main(cfg):
     )
     trainer.fit(model, datamodule=dm, ckpt_path=cfg.resume)
     if trainer.is_global_zero:
+        if dm.validation_frame is None:
+            raise RuntimeError("Validation data was not prepared")
         summary = {
             "output_dir": str(out),
-            "init_checkpoint": str(cfg.init_checkpoint) if cfg.init_checkpoint else None,
-            "initial_weights": initial_weights,
+            "datasets": list(cfg.pretrain.datasets),
+            "train_images": len(dm.train_frame),
+            "train_identities": dm.num_classes,
+            "validation_images": len(dm.validation_frame),
             "best_checkpoint": checkpoint.best_model_path,
             "last_checkpoint": checkpoint.last_model_path,
         }

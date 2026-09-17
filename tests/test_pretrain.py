@@ -1,0 +1,382 @@
+import json
+from pathlib import Path
+from types import SimpleNamespace
+from typing import cast
+
+import lightning as L
+import pandas as pd
+import pytest
+import torch
+from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf, open_dict
+from PIL import Image
+from torch import nn
+
+import pretrain as pretrain_module
+import train
+from dataset.folds import fingerprint
+from dataset.pretrain import (
+    READERS,
+    PretrainDataModule,
+    load_external_data,
+    read_veri,
+    read_vric,
+)
+
+
+def write_image(path: Path):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    Image.new("RGB", (20, 16), (12, 34, 56)).save(path)
+
+
+def write_veri(root: Path, identities: int = 4, declared: bool = True):
+    image_dir = root / "image_train"
+    items = []
+    for identity in range(identities):
+        for camera in range(2):
+            name = f"{identity:04d}_c{camera + 1:03d}_0.jpg"
+            write_image(image_dir / name)
+            items.append(
+                f'        <Item imageName="{name}" vehicleID="{identity:04d}" cameraID="c{camera + 1:03d}" />'
+            )
+    body = "<TrainingImages>\n    <Items>\n" + "\n".join(items) + "\n    </Items>\n</TrainingImages>\n"
+    prefix = '<?xml version="1.0" encoding="gb2312" ?>\n' if declared else ""
+    (root / "train_label.xml").write_bytes((prefix + body).encode("gb18030"))
+    return root
+
+
+def write_vric(root: Path, identities: int = 4):
+    image_dir = root / "train_images"
+    lines = []
+    for identity in range(identities):
+        for camera in range(2):
+            name = f"img_{identity}_{camera}.jpg"
+            write_image(image_dir / name)
+            lines.append(f"{name} {identity + 1} {camera + 1}")
+    (root / "vric_train.txt").write_text("\n".join(lines) + "\n")
+    return root
+
+
+def attach_pretrain(cfg, tmp_path, datasets=("veri", "vric")):
+    veri_root = write_veri(tmp_path / "VeRi")
+    vric_root = write_vric(tmp_path / "VRIC")
+    with open_dict(cfg):
+        cfg.pretrain = {
+            "datasets": list(datasets),
+            "validation_csv": cfg.data.train_csv,
+            "veri": {"root": str(veri_root)},
+            "vric": {"root": str(vric_root)},
+        }
+    return cfg
+
+
+def test_pretrain_config_composes():
+    with initialize_config_dir(
+        version_base="1.3", config_dir=str(Path(__file__).resolve().parents[1] / "configs")
+    ):
+        cfg = compose(config_name="pretrain", overrides=["experiment=smoke"])
+    assert list(cfg.pretrain.datasets) == ["veri", "vric"]
+    assert cfg.pretrain.validation_csv == cfg.data.train_csv
+    assert cfg.init_checkpoint is None
+
+
+def test_read_veri_and_vric_formats(tmp_path):
+    veri = read_veri(write_veri(tmp_path / "declared"))
+    assert veri.source.unique().tolist() == ["veri"]
+    assert veri.full_image.all()
+    assert veri.image_id.str.startswith("veri:").all()
+    assert Path(veri.image_path.iloc[0]).is_file()
+
+    undeclared = read_veri(write_veri(tmp_path / "plain", declared=False))
+    assert len(undeclared) == len(veri)
+
+    vric = read_vric(write_vric(tmp_path / "vric"))
+    assert vric.source.unique().tolist() == ["vric"]
+    assert vric.identity_key.str.startswith("vric:").all()
+
+
+def test_external_reader_errors(tmp_path):
+    with pytest.raises(FileNotFoundError, match="Incomplete VeRi"):
+        read_veri(tmp_path / "missing-veri")
+    empty_veri = tmp_path / "empty-veri"
+    (empty_veri / "image_train").mkdir(parents=True)
+    (empty_veri / "train_label.xml").write_bytes(b"<TrainingImages><Items/></TrainingImages>")
+    with pytest.raises(ValueError, match="empty"):
+        read_veri(empty_veri)
+
+    with pytest.raises(FileNotFoundError, match="Incomplete VRIC"):
+        read_vric(tmp_path / "missing-vric")
+    empty_vric = tmp_path / "empty-vric"
+    (empty_vric / "train_images").mkdir(parents=True)
+    (empty_vric / "vric_train.txt").write_text("")
+    with pytest.raises(ValueError, match="empty"):
+        read_vric(empty_vric)
+    (empty_vric / "vric_train.txt").write_text("image 1\n")
+    with pytest.raises(ValueError, match="expected image, identity, camera"):
+        read_vric(empty_vric)
+
+
+def test_load_external_data_mix_and_guards(data_cfg, tmp_path, monkeypatch):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    mixed = load_external_data(cfg)
+    assert set(mixed.source) == {"veri", "vric"}
+    assert mixed.vehicle_id.nunique() == mixed.identity_key.nunique()
+    assert mixed.camera_id.nunique() == mixed.camera_key.nunique()
+    assert mixed.image_id.is_unique
+
+    cfg.pretrain.datasets = ["veri"]
+    assert load_external_data(cfg).source.unique().tolist() == ["veri"]
+
+    cfg.pretrain.datasets = []
+    with pytest.raises(ValueError, match="unique dataset names"):
+        load_external_data(cfg)
+    cfg.pretrain.datasets = ["veri", "veri"]
+    with pytest.raises(ValueError, match="unique dataset names"):
+        load_external_data(cfg)
+    cfg.pretrain.datasets = ["madcars"]
+    with pytest.raises(ValueError, match="Unknown pretraining datasets"):
+        load_external_data(cfg)
+
+    cfg.pretrain.datasets = ["veri", "vric"]
+    cloned = load_external_data(cfg)
+    monkeypatch.setitem(
+        READERS,
+        "vric",
+        lambda root: cloned.loc[cloned.source == "veri"].assign(source="vric"),
+    )
+    with pytest.raises(ValueError, match="unique"):
+        load_external_data(cfg)
+
+
+def test_pretrain_datamodule_uses_full_competition_train(data_cfg, tmp_path):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    dm = PretrainDataModule(cfg)
+    dm.prepare_data()
+    dm.setup("fit")
+    validation = pd.read_csv(cfg.data.train_csv)
+    assert dm.validation_frame is not None
+    assert len(dm.train_frame) == 16
+    assert dm.num_classes == 8
+    assert len(dm.validation_frame) == len(validation)
+    assert set(dm.query_frame.image_id).isdisjoint(dm.gallery_frame.image_id)
+    used = set(dm.query_frame.image_id).union(dm.gallery_frame.image_id)
+    assert used <= set(validation.image_id.astype(str))
+    assert fingerprint(dm.folds) == fingerprint(dm.train_frame)
+    item = dm.train_set[0]
+    assert item["image"].ndim == 3
+    dm.trainer = cast(L.Trainer, SimpleNamespace(global_rank=0, world_size=1))
+    assert next(iter(dm.train_dataloader()))["image"].ndim == 4
+    assert next(iter(dm.val_dataloader()))["image"].ndim == 4
+
+
+class FakePretrainDataModule:
+    def __init__(self, cfg):
+        self.cfg = cfg
+        self.folds = pd.DataFrame({"image_id": ["a", "b"], "vehicle_id": [1, 2]})
+        self.label_map = {1: 0, 2: 1}
+        self.num_classes = 2
+        self.train_frame = self.folds
+        self.validation_frame = pd.DataFrame({"image_id": ["q"]})
+        self.saved = None
+
+    def prepare_data(self):
+        self.prepared = True
+
+    def setup(self, stage=None):
+        self.stage = stage
+
+    def save_split(self, path):
+        self.saved = path
+        Path(path).mkdir(parents=True, exist_ok=True)
+
+
+class FakeCheckpoint:
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.best_model_path = "best.ckpt"
+        self.last_model_path = "last.ckpt"
+
+
+class FakeTrainer:
+    instances = []
+    global_zero = True
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        self.is_global_zero = self.global_zero
+        self.fit_args = None
+        self.instances.append(self)
+
+    def fit(self, model, datamodule=None, ckpt_path=None):
+        self.fit_args = (model, datamodule, ckpt_path)
+
+
+def test_pretrain_main_all_paths(data_cfg, tmp_path, monkeypatch):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    cfg.output_dir = str(tmp_path / "pretrain-run")
+    cfg.trainer.accelerator = "cpu"
+    cfg.trainer.devices = 2
+    cfg.trainer.strategy = "auto"
+    cfg.resume = None
+    monkeypatch.setattr(pretrain_module, "PretrainDataModule", FakePretrainDataModule)
+    monkeypatch.setattr(pretrain_module, "ReIDModule", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(pretrain_module, "ModelCheckpoint", FakeCheckpoint)
+    monkeypatch.setattr(pretrain_module, "CSVLogger", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(pretrain_module.L, "Trainer", FakeTrainer)
+    monkeypatch.setattr(pretrain_module.L, "seed_everything", lambda *args, **kwargs: None)
+    FakeTrainer.instances.clear()
+    FakeTrainer.global_zero = True
+    pretrain_module.main.__wrapped__(cfg)
+    summary = json.loads((tmp_path / "pretrain-run/run_summary.json").read_text())
+    assert summary["datasets"] == ["veri", "vric"]
+    assert summary["train_identities"] == 2
+    assert FakeTrainer.instances[-1].kwargs["strategy"] == "ddp_find_unused_parameters_true"
+
+    dm = FakePretrainDataModule(cfg)
+    resume = tmp_path / "resume.ckpt"
+    torch.save({"data_fingerprint": fingerprint(dm.folds), "label_map": dm.label_map}, resume)
+    cfg.resume = str(resume)
+    cfg.trainer.devices = 1
+    cfg.trainer.limit_val_batches = 1.0
+    summary_path = tmp_path / "pretrain-run/run_summary.json"
+    summary_path.unlink()
+    FakeTrainer.global_zero = False
+    pretrain_module.main.__wrapped__(cfg)
+    assert FakeTrainer.instances[-1].fit_args[2] == str(resume)
+    assert not summary_path.exists()
+
+    torch.save({"data_fingerprint": "wrong", "label_map": dm.label_map}, resume)
+    with pytest.raises(ValueError, match="different pretraining data"):
+        pretrain_module.main.__wrapped__(cfg)
+    with pytest.raises(TypeError, match="mapping"):
+        pretrain_module.container_dict(OmegaConf.create([1]))
+
+    FakeTrainer.global_zero = True
+    cfg.resume = None
+    monkeypatch.setattr(
+        pretrain_module,
+        "PretrainDataModule",
+        lambda cfg: SimpleNamespace(
+            folds=dm.folds,
+            label_map=dm.label_map,
+            num_classes=2,
+            train_frame=dm.train_frame,
+            validation_frame=None,
+            prepare_data=lambda: None,
+            setup=lambda stage=None: None,
+            save_split=lambda path: Path(path).mkdir(parents=True, exist_ok=True),
+        ),
+    )
+    with pytest.raises(RuntimeError, match="Validation data was not prepared"):
+        pretrain_module.main.__wrapped__(cfg)
+
+
+class InitModule(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = nn.Linear(1, 1)
+
+    def load_state_dict(self, state_dict, strict=True, assign=False):
+        return super().load_state_dict(state_dict, strict=strict)
+
+
+def test_load_initial_weights_choices_and_mismatches(tmp_path):
+    module = InitModule()
+    path = tmp_path / "init.ckpt"
+    torch.save(
+        {
+            "state_dict": dict(module.state_dict()),
+            "validation_weights": "raw",
+        },
+        path,
+    )
+    assert train.load_initial_weights(module, path) == "raw"
+
+    torch.save(
+        {
+            "state_dict": dict(module.state_dict()),
+            "ema": {"shadow": dict(module.model.state_dict())},
+            "validation_weights": "ema",
+        },
+        path,
+    )
+    assert train.load_initial_weights(module, path) == "ema"
+
+    torch.save({"state_dict": {"model.weight": torch.ones(2, 1)}, "validation_weights": "raw"}, path)
+    with pytest.raises(ValueError, match="same model, pooling, and head"):
+        train.load_initial_weights(module, path)
+
+    class Partial(InitModule):
+        def load_state_dict(self, state_dict, strict=True, assign=False):
+            return ["model.missing", "losses.term"], ["extra"]
+
+    with pytest.raises(ValueError, match="model mismatch"):
+        train.load_initial_weights(Partial(), path)
+
+    class LossesOnly(InitModule):
+        def load_state_dict(self, state_dict, strict=True, assign=False):
+            return ["losses.term"], []
+
+    torch.save(
+        {"state_dict": {"model.weight": module.model.weight.detach()}, "validation_weights": "ema"},
+        path,
+    )
+    assert train.load_initial_weights(LossesOnly(), path) == "raw"
+
+
+def test_train_main_init_checkpoint(cfg, tmp_path, monkeypatch):
+    class TrackingModule(InitModule):
+        def __init__(self, *args, **kwargs):
+            super().__init__()
+            self.kwargs = kwargs
+
+    class LocalTrainer:
+        def __init__(self, **kwargs):
+            self.is_global_zero = True
+            self.fit_args = None
+
+        def fit(self, model, datamodule=None, ckpt_path=None):
+            self.fit_args = (model, datamodule, ckpt_path)
+
+    module = TrackingModule()
+    path = tmp_path / "init.ckpt"
+    torch.save(
+        {
+            "state_dict": dict(module.state_dict()),
+            "ema": {"shadow": dict(module.model.state_dict())},
+            "validation_weights": "ema",
+        },
+        path,
+    )
+    monkeypatch.setattr(
+        train,
+        "ReIDDataModule",
+        lambda cfg: SimpleNamespace(
+            folds=pd.DataFrame({"image_id": ["a"], "vehicle_id": [1]}),
+            label_map={1: 0},
+            num_classes=1,
+            prepare_data=lambda: None,
+            setup=lambda stage=None: None,
+            save_split=lambda split: Path(split).mkdir(parents=True, exist_ok=True),
+        ),
+    )
+    created = {}
+
+    def make_module(*args, **kwargs):
+        created.update(kwargs)
+        return TrackingModule(*args, **kwargs)
+
+    monkeypatch.setattr(train, "ReIDModule", make_module)
+    monkeypatch.setattr(train, "ModelCheckpoint", FakeCheckpoint)
+    monkeypatch.setattr(train, "CSVLogger", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(train.L, "Trainer", LocalTrainer)
+    monkeypatch.setattr(train.L, "seed_everything", lambda *args, **kwargs: None)
+    cfg.output_dir = str(tmp_path / "init-run")
+    cfg.resume = None
+    cfg.init_checkpoint = str(path)
+    cfg.trainer.devices = 1
+    train.main.__wrapped__(cfg)
+    assert created["initialize_pretrained"] is False
+    summary = json.loads((tmp_path / "init-run/run_summary.json").read_text())
+    assert summary["init_checkpoint"] == str(path)
+    assert summary["initial_weights"] == "ema"

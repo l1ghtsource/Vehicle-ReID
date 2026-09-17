@@ -37,7 +37,15 @@ class VehicleDataset(Dataset):
         self.label_map = label_map or {}
         self.context = cfg.data.context_pct if context_pct is None else context_pct
         self.jitter = cfg.data.context_jitter_pct if train else 0
-        self.paths = [image_path(cfg.data.image_dir, x) for x in self.frame.image_id]
+        if "image_path" in self.frame:
+            self.paths = [Path(value) for value in self.frame.image_path]
+        else:
+            self.paths = [image_path(cfg.data.image_dir, value) for value in self.frame.image_id]
+        self.full_images = (
+            self.frame.full_image.astype(bool).tolist()
+            if "full_image" in self.frame
+            else [False] * len(self.frame)
+        )
         if cfg.data.verify_files:
             missing = [str(p) for p in self.paths if not p.is_file()]
             if missing:
@@ -50,7 +58,9 @@ class VehicleDataset(Dataset):
         row = self.frame.iloc[index]
         context = max(0.0, self.context + (2 * torch.rand(()).item() - 1) * self.jitter)
         with Image.open(self.paths[index]) as im:
-            im = crop_bbox(im.convert("RGB"), [row.x, row.y, row.w, row.h], context)
+            im = im.convert("RGB")
+            if not self.full_images[index]:
+                im = crop_bbox(im, [row.x, row.y, row.w, row.h], context)
             x = self.transform(np.asarray(im))
         pid = int(row.get("vehicle_id", -1))
         return {

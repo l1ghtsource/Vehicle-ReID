@@ -105,6 +105,25 @@ If `image_id` has no extension, the loader searches for `.jpg`, `.png`, and `.jp
 Bounding boxes are clipped to the image boundary. Invalid, empty, non-finite, or duplicated
 annotations are rejected instead of being silently corrected.
 
+### External pretraining data
+
+Optional identity-labeled crops live under `extra_data/`. The current loaders are:
+
+```text
+extra_data/
+├── VeRi/
+│   ├── image_train/
+│   └── train_label.xml
+└── VRIC/
+    ├── train_images/
+    └── vric_train.txt
+```
+
+VeRi uses `image_train/` plus `train_label.xml`. VRIC uses `train_images/` plus
+`vric_train.txt` lines of `image identity camera`. These images are already cropped, so
+pretraining does not apply competition bounding boxes. Other folders under `extra_data/`,
+including mad-cars, are ignored.
+
 ## Data validation and folds
 
 Audit CSV files, image paths, image readability, and bounding boxes:
@@ -277,6 +296,40 @@ Resume training from a checkpoint:
 
 The checkpoint is accepted only if its data fingerprint and label mapping match the current fold.
 This prevents accidental continuation on different data or a different identity-to-class mapping.
+
+### External pretraining
+
+`pretrain.py` trains on 100% of one or more extra datasets and validates against 100% of the
+competition `train.csv` query/gallery split. Use this to produce a backbone/head checkpoint that
+can initialize ordinary competition training.
+
+Train on VeRi, VRIC, or both:
+
+```bash
+.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[veri]
+.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[vric]
+.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[veri,vric]
+```
+
+The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
+not collide. Outputs include the usual Lightning checkpoints plus `run_summary.json` with dataset
+names, image counts, and checkpoint paths.
+
+Initialize a competition fold from the pretrain checkpoint. Keep the model, pooling, and embedding
+head the same. Do not use `resume` for this transfer: pretraining uses a different identity space
+and data fingerprint, so `train.py` would reject that checkpoint.
+
+```bash
+.venv/bin/python train.py \
+  model=dinov3_convnext_base \
+  init_checkpoint=runs/pretrain/external_pretrain/<run>/checkpoints/<ckpt>.ckpt \
+  data.fold=0
+```
+
+`init_checkpoint` loads `model.*` weights only. If the pretrain checkpoint stored EMA weights and
+`validation_weights=ema`, those shadows are used; otherwise the raw `state_dict` is used. Losses
+and classifiers are created for the competition identity count. `resume` and `init_checkpoint`
+cannot be set together.
 
 ## Evaluation and retrieval
 
@@ -516,16 +569,21 @@ Per-epoch fold metrics remain available in
 
 ## Quality gates
 
-Run all checks:
+Format first-party code, then run Ruff and ty:
 
 ```bash
-.venv/bin/ruff format --check .
-.venv/bin/ruff check .
-.venv/bin/ty check
-.venv/bin/pytest
+make lint
 ```
 
-Or run the test target:
+The equivalent commands are:
+
+```bash
+.venv/bin/ruff format .
+.venv/bin/ruff check .
+.venv/bin/ty check
+```
+
+Run tests:
 
 ```bash
 make test
@@ -552,13 +610,15 @@ exclusion. Function-local imports are forbidden by Ruff rule `PLC0415`.
 ```text
 augmentations/  Config-driven image augmentation pipeline
 configs/        Hydra model, loss, optimizer, scheduler, and experiment presets
-dataset/        Annotation validation, folds, datasets, data module, and samplers
+dataset/        Annotation validation, folds, datasets, data module, pretrain loaders, and samplers
+extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 postproc/       Retrieval expansion, aggregation, and reranking
 scripts/        Dataset audit, fold creation, weight download, model checks, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
 third_party/    Vendored upstream implementations
+pretrain.py     Hydra pretraining entrypoint on extra data
 train.py        Hydra training entrypoint
 eval.py         Checkpoint-driven evaluation and retrieval entrypoint
 ```

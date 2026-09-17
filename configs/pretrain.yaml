@@ -1,0 +1,17 @@
+defaults:
+  - config
+  - _self_
+
+name: external_pretrain
+output_dir: runs/pretrain/${name}/${now:%Y%m%d_%H%M%S}
+
+# External identity-labeled crops. Training uses 100% of the selected sources.
+# Validation uses 100% of the competition train CSV as a query/gallery split.
+# Resulting checkpoints initialize ordinary train.py runs via init_checkpoint.
+pretrain:
+  datasets: [veri, vric]
+  validation_csv: ${data.train_csv}
+  veri:
+    root: extra_data/VeRi
+  vric:
+    root: extra_data/VRIC

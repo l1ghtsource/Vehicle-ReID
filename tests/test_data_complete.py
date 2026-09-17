@@ -141,6 +141,12 @@ def test_images_and_vehicle_dataset(data_cfg, tmp_path, monkeypatch):
     with pytest.raises(FileNotFoundError):
         VehicleDataset(frame, data_cfg, transform)
 
+    full = read_annotations(data_cfg.data.train_csv, labeled=True).iloc[:1].copy()
+    full["image_path"] = str(Path(data_cfg.data.image_dir) / f"{full.image_id.iloc[0]}.jpg")
+    full["full_image"] = True
+    item = VehicleDataset(full, data_cfg, transform)[0]
+    assert item["image"].shape[1] == 16
+
 
 def test_datamodule_all_loaders(data_cfg, tmp_path):
     dm = ReIDDataModule(data_cfg)

@@ -67,6 +67,7 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
     cfg.trainer.devices = 2
     cfg.trainer.strategy = "auto"
     cfg.resume = None
+    cfg.init_checkpoint = None
     train.main.__wrapped__(cfg)
     assert FakeTrainer.instances[-1].kwargs["strategy"] == "ddp_find_unused_parameters_true"
     assert FakeTrainer.instances[-1].fit_args[2] is None
@@ -90,6 +91,10 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
         train.main.__wrapped__(cfg)
     with pytest.raises(TypeError, match="mapping"):
         train.container_dict(OmegaConf.create([1]))
+    cfg.resume = str(resume)
+    cfg.init_checkpoint = str(resume)
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        train.main.__wrapped__(cfg)
 
 
 class LoadedModel(nn.Module):
@@ -210,4 +215,5 @@ def test_entrypoint_main_guards(monkeypatch):
     monkeypatch.setattr("hydra.main", decorator)
     runpy.run_module("train", run_name="__main__")
     runpy.run_module("eval", run_name="__main__")
-    assert called == ["__main__", "__main__"]
+    runpy.run_module("pretrain", run_name="__main__")
+    assert called == ["__main__", "__main__", "__main__"]
