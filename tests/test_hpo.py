@@ -303,6 +303,33 @@ def test_run_parallel_real_processes(tmp_path):
     assert codes[1] != 0
 
 
+def test_run_parallel_kills_sigterm_ignoring_child(tmp_path, monkeypatch):
+    monkeypatch.setattr(runner, "CHILD_STOP_TIMEOUT", 0.5)
+    ready = tmp_path / "ready"
+    ignorer = (
+        "import pathlib, signal, time;"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN);"
+        f"pathlib.Path({str(ready)!r}).write_text('1');"
+        "time.sleep(60)"
+    )
+    failer = (
+        "import pathlib, time;"
+        f"path = pathlib.Path({str(ready)!r});"
+        "deadline = time.time() + 5;"
+        "while not path.exists() and time.time() < deadline:"
+        "    time.sleep(0.05);"
+        "raise SystemExit(1)"
+    )
+    codes = runner.run_parallel(
+        [[sys.executable, "-c", failer], [sys.executable, "-c", ignorer]],
+        [tmp_path / "failed.log", tmp_path / "ignorer.log"],
+        [3, 4],
+    )
+    assert codes[0] == 1
+    assert codes[1] != 0
+    assert runner.CHILDREN == []
+
+
 def test_run_parallel_kills_children_on_interrupt(tmp_path, monkeypatch):
     marker = tmp_path / "pid.txt"
     interrupted = False

@@ -22,6 +22,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("reid_optuna")
 CHILDREN: list[subprocess.Popen[bytes]] = []
 FINISHED_STATES = {TrialState.COMPLETE, TrialState.PRUNED, TrialState.FAIL}
+CHILD_STOP_TIMEOUT = 15.0
 
 
 def setup_logging(path: Path) -> None:
@@ -34,18 +35,22 @@ def setup_logging(path: Path) -> None:
     )
 
 
-def kill_children() -> None:
-    for process in CHILDREN:
+def stop_processes(processes: list[subprocess.Popen[bytes]]) -> None:
+    for process in processes:
         if process.poll() is None:
             process.terminate()
-    deadline = time.monotonic() + 15
-    for process in CHILDREN:
+    deadline = time.monotonic() + CHILD_STOP_TIMEOUT
+    for process in processes:
         if process.poll() is None:
             try:
                 process.wait(timeout=max(0.0, deadline - time.monotonic()))
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait()
+
+
+def kill_children() -> None:
+    stop_processes(CHILDREN)
 
 
 def run_parallel(
@@ -79,13 +84,8 @@ def run_parallel(
             if all(code is not None for code in codes):
                 return [int(code) for code in codes if code is not None]
             if any(code not in {None, 0} for code in codes):
-                for process, code in zip(processes, codes, strict=True):
-                    if code is None:
-                        process.terminate()
-                return [
-                    process.wait() if code is None else code
-                    for process, code in zip(processes, codes, strict=True)
-                ]
+                stop_processes(processes)
+                return [int(process.wait()) for process in processes]
             time.sleep(0.25)
     finally:
         kill_children()
