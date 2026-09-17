@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 import torch
 from hydra.core.hydra_config import HydraConfig
+from hydra.core.override_parser.overrides_parser import OverridesParser
+from hydra.errors import HydraException
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
@@ -18,6 +20,8 @@ from models import ReIDModel
 from modules.inference import embed_loader
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
+
+DATA_ROOT_PATHS = ("train_csv", "query_csv", "gallery_csv", "image_dir")
 
 
 def task_overrides() -> list[str]:
@@ -31,14 +35,32 @@ def task_overrides() -> list[str]:
 
 def override_key(item: str) -> str | None:
     text = str(item).strip()
-    if not text or text.startswith("~"):
+    if not text:
         return None
-    if text[0] in {"+", "@"}:
-        text = text[1:]
-    key = text.split("=", 1)[0]
+    try:
+        parsed = OverridesParser.create().parse_override(text)
+    except HydraException:
+        return None
+    if parsed.is_delete():
+        return None
+    key = parsed.key_or_group
     if "." not in key:
         return None
     return key
+
+
+def remount_data_root(saved, effective, overridden: set[str]) -> None:
+    if "data.root" not in overridden:
+        return
+    old_root = Path(str(saved.data.root))
+    new_root = Path(str(effective.data.root))
+    for name in DATA_ROOT_PATHS:
+        key = f"data.{name}"
+        if key in overridden:
+            continue
+        current = Path(str(OmegaConf.select(effective, key)))
+        if current.is_relative_to(old_root):
+            OmegaConf.update(effective, key, str(new_root / current.relative_to(old_root)))
 
 
 def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
@@ -58,14 +80,17 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
         },
     )
     missing = object()
+    overridden: set[str] = set()
     for item in task_overrides() if override_items is None else override_items:
         key = override_key(item)
         if key is None:
             continue
+        overridden.add(key)
         value = OmegaConf.select(cfg, key, default=missing)
         if value is missing:
             continue
         OmegaConf.update(effective, key, value, merge=True)
+    remount_data_root(saved, effective, overridden)
     return effective
 
 

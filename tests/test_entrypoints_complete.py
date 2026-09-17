@@ -1,5 +1,7 @@
 import json
 import runpy
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -189,6 +191,10 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     data_cfg["fold"] = 2
     data_cfg["folds_file"] = "/ckpt/folds.csv"
     data_cfg["root"] = "/ckpt/root"
+    data_cfg["train_csv"] = "/ckpt/root/train.csv"
+    data_cfg["query_csv"] = "/ckpt/root/test_query.csv"
+    data_cfg["gallery_csv"] = "/elsewhere/gallery.csv"
+    data_cfg["image_dir"] = "/ckpt/root/images"
     checkpoint["hyper_parameters"]["cfg"] = saved
     torch.save(checkpoint, path)
     cfg.eval.tta.enabled = False
@@ -207,12 +213,15 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert int(effective.data.fold) == 2
     assert str(effective.data.folds_file) == "/ckpt/folds.csv"
     assert str(effective.data.root) == "/ckpt/root"
+    assert str(effective.data.query_csv) == "/ckpt/root/test_query.csv"
+    assert str(effective.data.gallery_csv) == "/elsewhere/gallery.csv"
 
     cfg.eval.tta.enabled = True
     cfg.postproc.enabled = True
     cfg.postproc.rerank.kind = "gnn"
     cfg.data.fold = 1
     cfg.data.root = "/custom/root"
+    cfg.data.query_csv = "/explicit/query.csv"
     _, effective, _, _ = eval_module.load_model(
         cfg,
         [
@@ -221,6 +230,7 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
             "postproc.rerank.kind=gnn",
             "data.fold=1",
             "data.root=/custom/root",
+            "data.query_csv=/explicit/query.csv",
             "experiment=smoke",
             "~trainer.devices",
             "+data.foo=1",
@@ -233,6 +243,10 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert int(effective.data.fold) == 1
     assert str(effective.data.root) == "/custom/root"
     assert str(effective.data.folds_file) == "/ckpt/folds.csv"
+    assert str(effective.data.train_csv) == "/custom/root/train.csv"
+    assert str(effective.data.query_csv) == "/explicit/query.csv"
+    assert str(effective.data.gallery_csv) == "/elsewhere/gallery.csv"
+    assert str(effective.data.image_dir) == "/custom/root/images"
 
 
 class EvalModel(nn.Module):
@@ -315,10 +329,12 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
 def test_eval_override_helpers(monkeypatch):
     assert eval_module.task_overrides() == []
     assert eval_module.override_key("") is None
+    assert eval_module.override_key("??") is None
     assert eval_module.override_key("~data.fold") is None
     assert eval_module.override_key("experiment=smoke") is None
+    assert eval_module.override_key("@eval.tta.enabled=true") is None
     assert eval_module.override_key("+data.fold=2") == "data.fold"
-    assert eval_module.override_key("@eval.tta.enabled=true") == "eval.tta.enabled"
+    assert eval_module.override_key("++eval.tta.enabled=true") == "eval.tta.enabled"
 
     class FakeHydra:
         @staticmethod
@@ -343,6 +359,71 @@ def test_eval_override_helpers(monkeypatch):
 
     monkeypatch.setattr(eval_module, "HydraConfig", EmptyHydra)
     assert eval_module.task_overrides() == []
+
+
+def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
+    old_root = "/old-training-host/data"
+    saved = OmegaConf.to_container(data_cfg, resolve=True)
+    if not isinstance(saved, dict):
+        raise TypeError("Expected mapping checkpoint config")
+    data = saved["data"]
+    eval_cfg = saved["eval"]
+    if not isinstance(data, dict) or not isinstance(eval_cfg, dict):
+        raise TypeError("Expected mapping data/eval config")
+    tta_cfg = eval_cfg["tta"]
+    if not isinstance(tta_cfg, dict):
+        raise TypeError("Expected mapping tta config")
+    data["root"] = old_root
+    data["train_csv"] = f"{old_root}/train.csv"
+    data["query_csv"] = f"{old_root}/test_query.csv"
+    data["gallery_csv"] = f"{old_root}/test_gallery.csv"
+    data["image_dir"] = f"{old_root}/images"
+    tta_cfg["enabled"] = False
+    checkpoint = tmp_path / "model.ckpt"
+    model = eval_module.ReIDModel(data_cfg, initialize_pretrained=False)
+    torch.save(
+        {
+            "hyper_parameters": {"cfg": saved},
+            "state_dict": {f"model.{key}": value for key, value in model.state_dict().items()},
+            "validation_weights": "raw",
+        },
+        checkpoint,
+    )
+    out = tmp_path / "eval_out"
+    project = Path(__file__).resolve().parents[1]
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(project / "eval.py"),
+            f"checkpoint={checkpoint}",
+            f"data.root={data_cfg.data.root}",
+            "++eval.tta.enabled=true",
+            "eval.split=test",
+            "eval.device=cpu",
+            "eval.weights=raw",
+            "eval.save_distances=false",
+            f"eval.output_dir={out}",
+            f"output_dir={tmp_path / 'run'}",
+            "experiment=smoke",
+            "trainer.deterministic=false",
+            "data.num_workers=0",
+            "data.pin_memory=false",
+        ],
+        cwd=project,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr
+    written = OmegaConf.load(out / "config.yaml")
+    assert bool(written.eval.tta.enabled) is True
+    assert str(written.data.root) == str(data_cfg.data.root)
+    assert str(written.data.query_csv) == str(Path(data_cfg.data.root) / "test_query.csv")
+    assert str(written.data.gallery_csv) == str(Path(data_cfg.data.root) / "test_gallery.csv")
+    assert str(written.data.image_dir) == str(Path(data_cfg.data.root) / "images")
+    assert str(written.data.train_csv) == str(Path(data_cfg.data.root) / "train.csv")
+    assert not str(written.data.query_csv).startswith(old_root)
+    assert (out / "submission.csv").is_file()
 
 
 def test_entrypoint_main_guards(monkeypatch):
