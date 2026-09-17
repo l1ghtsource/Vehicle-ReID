@@ -15,6 +15,8 @@ from transformers import AutoConfig, AutoModel
 from third_party.eva_clip.eva_vit_model import EVAVisionTransformer
 from third_party.radio.hf_model import RADIOConfig, RADIOModel
 
+from .input_size import spatial_multiple
+
 
 def container_dict(value: Any) -> dict[str, Any]:
     container = OmegaConf.to_container(value, resolve=True)
@@ -41,9 +43,17 @@ class Backbone(nn.Module):
         self.prefix = cfg.num_prefix_tokens
         self.layout = cfg.layout
         pretrained = bool(cfg.pretrained and initialize_pretrained)
+        sizes = tuple(int(value) for value in image_size)
         kw = container_dict(cfg.kwargs)
         if cfg.backend == "timm":
+            multiple = spatial_multiple(cfg)
+            if sizes[0] % multiple or sizes[1] % multiple:
+                raise ValueError(
+                    f"data.image_size {list(sizes)} must be divisible by {multiple} for {cfg.name}"
+                )
             args: dict[str, Any] = dict(pretrained=pretrained and not cfg.checkpoint_path, **kw)
+            if bool(cfg.get("bind_image_size", False)):
+                args.setdefault("img_size", sizes)
             if cfg.drop_path_rate:
                 args["drop_path_rate"] = cfg.drop_path_rate
             if cfg.features_only:

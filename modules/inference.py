@@ -4,6 +4,8 @@ import torch
 from torch.nn import functional as F
 from torchvision.transforms.functional import InterpolationMode, rotate
 
+from models.input_size import scaled_hw, spatial_multiple
+
 
 @torch.inference_mode()
 def embed_loader(model, loader, cfg, device):
@@ -17,12 +19,14 @@ def embed_loader(model, loader, cfg, device):
     flips = [False, True] if tta.enabled and tta.hflip else [False]
     if not scales or not angles or min(scales) <= 0:
         raise ValueError("TTA scales/rotations must be nonempty and scales positive")
+    multiple = spatial_multiple(cfg.model)
     for batch in loader:
         x = batch["image"].to(device, non_blocking=True)
         embeddings = []
         for scale in scales:
-            size = [max(1, round(s * scale)) for s in x.shape[-2:]]
-            z = F.interpolate(x, size=size, mode="bilinear", align_corners=False) if scale != 1 else x
+            size = scaled_hw(int(x.shape[-2]), int(x.shape[-1]), float(scale), multiple)
+            native = (int(x.shape[-2]), int(x.shape[-1]))
+            z = x if size == native else F.interpolate(x, size=size, mode="bilinear", align_corners=False)
             for angle in angles:
                 zr = rotate(z, angle, interpolation=InterpolationMode.BILINEAR) if angle else z
                 for flip in flips:

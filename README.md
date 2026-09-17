@@ -119,10 +119,21 @@ extra_data/
     └── vric_train.txt
 ```
 
-VeRi uses `image_train/` plus `train_label.xml`. VRIC uses `train_images/` plus
-`vric_train.txt` lines of `image identity camera`. These images are already cropped, so
-pretraining does not apply competition bounding boxes. Other folders under `extra_data/`,
-including mad-cars, are ignored.
+VeRi uses `image_train/` plus `train_label.xml`. Source:
+[VeRi-776 on Kaggle](https://www.kaggle.com/datasets/abhyudaya12/veri-vehicle-re-identification-dataset)
+([CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)).
+
+VRIC uses `train_images/` plus `vric_train.txt` lines of `image identity camera`. Source:
+[VRIC](https://qmul-vric.github.io/). The images are derived from [UA-DETRAC](https://detrac-db.rit.albany.edu/).
+
+Both datasets are public academic ReID benchmarks. Their bundled terms are research-only: attribution
+is required, redistribution and commercial use are not. That matches the task statement: public
+pretrained weights and third-party open datasets are allowed and encouraged, while closed,
+proprietary, or unreproducible data are not. List these sources in the solution README when a
+pretrained checkpoint is submitted. Do not copy `extra_data/` into the submission; keep the
+datasets reproducible from the original downloads.
+
+These images are already cropped, so pretraining does not apply competition bounding boxes.
 
 ## Data validation and folds
 
@@ -550,8 +561,12 @@ parameters, and analyze parameter importance:
 
 ```bash
 .venv/bin/optuna-dashboard \
-  sqlite:///artifacts/optuna/convnext_large_all.db
+  sqlite:///artifacts/optuna/convnext_base_all.db
 ```
+
+Use `artifacts/optuna/<study-name>.db` for the study you actually started. The file is created by
+`hpo.run_optuna_search`; the dashboard will not initialize schema. Pointing it at a missing path
+creates an empty SQLite file and then fails with `no such table: version_info`.
 
 The dashboard is available at `http://127.0.0.1:8080`. For a remote machine, either forward port
 8080 over SSH or expose the service on the machine's network interface:
@@ -560,7 +575,7 @@ The dashboard is available at `http://127.0.0.1:8080`. For a remote machine, eit
 .venv/bin/optuna-dashboard \
   --host 0.0.0.0 \
   --port 8080 \
-  sqlite:///artifacts/optuna/convnext_large_all.db
+  sqlite:///artifacts/optuna/convnext_base_all.db
 ```
 
 The dashboard can safely read the SQLite study while the search runner is writing new trials.

@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 import modules.lightning_module as lightning_module
-from modules.lightning_module import ReIDModule
+from modules.lightning_module import ReIDModule, is_partial_validation
 from modules.regularization import EMA
 
 
@@ -59,6 +59,18 @@ def trainer(**kwargs):
     }
     values.update(kwargs)
     return cast(L.Trainer, SimpleNamespace(**values))
+
+
+def test_partial_validation_limit_types():
+    assert is_partial_validation(None) is False
+    assert is_partial_validation(1.0) is False
+    assert is_partial_validation(1) is True
+    assert is_partial_validation(2) is True
+    assert is_partial_validation(0.5) is True
+    with pytest.raises(TypeError, match="int or float"):
+        is_partial_validation(True)
+    with pytest.raises(TypeError, match="int or float"):
+        is_partial_validation("1.0")
 
 
 def batch():

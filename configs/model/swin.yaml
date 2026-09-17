@@ -2,3 +2,8 @@ defaults:
   - convnext_tiny
 name: swin_base_patch4_window7_224.ms_in22k_ft_in1k
 layout: NHWC
+spatial_multiple: 32
+bind_image_size: true
+# Created at data.image_size. strict_img_size is off so TTA can vary on the 32px grid.
+kwargs:
+  strict_img_size: false

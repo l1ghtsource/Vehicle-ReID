@@ -7,6 +7,7 @@ features_only: false
 feature_dims: [1024]
 layout: NLC
 num_prefix_tokens: 1
+spatial_multiple: 14
 drop_path_rate: 0.0
 pooling:
   kind: cls

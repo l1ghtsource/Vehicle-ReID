@@ -12,7 +12,7 @@ from torch import nn
 
 from dataset import ReIDDataModule
 from dataset.folds import fingerprint
-from modules.lightning_module import ReIDModule
+from modules.lightning_module import ReIDModule, is_partial_validation
 
 
 def container_dict(value: Any) -> dict[str, Any]:
@@ -76,7 +76,7 @@ def main(cfg):
             raise ValueError("Resume checkpoint belongs to different data/fold; refusing unsafe resume")
     args = container_dict(cfg.trainer)
 
-    partial = args["limit_val_batches"] != 1.0
+    partial = is_partial_validation(args["limit_val_batches"])
     checkpoint = ModelCheckpoint(
         dirpath=out / "checkpoints",
         filename="epoch{epoch:03d}",

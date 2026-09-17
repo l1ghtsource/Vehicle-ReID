@@ -4,6 +4,8 @@ name: vit_base_patch16_224.augreg_in21k_ft_in1k
 features_only: false
 layout: NLC
 num_prefix_tokens: 1
+spatial_multiple: 16
+bind_image_size: true
 kwargs:
   dynamic_img_size: true
 pooling:

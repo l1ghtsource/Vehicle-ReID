@@ -7,6 +7,7 @@ feature_dims: [1152]
 features_only: false
 layout: NLC
 num_prefix_tokens: 0
+spatial_multiple: 16
 drop_path_rate: 0.0
 pooling:
   kind: gap

@@ -78,6 +78,27 @@ class OneImageDataset(Dataset):
         return {"image": torch.arange(48, dtype=torch.float32).reshape(3, 4, 4)}
 
 
+class SizeRecordModel(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.sizes = []
+
+    def forward(self, x):
+        self.sizes.append((int(x.shape[-2]), int(x.shape[-1])))
+        return {"embedding": x.mean((-2, -1))}
+
+
+class SquareImages(Dataset):
+    def __init__(self, size):
+        self.size = size
+
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, index):
+        return {"image": torch.zeros(3, self.size, self.size)}
+
+
 def loader():
     return DataLoader(OneImageDataset(), batch_size=1)
 
@@ -91,6 +112,14 @@ def test_embed_loader_tta_and_guards(cfg, monkeypatch):
     cfg.eval.tta.hflip = True
     result = embed_loader(EmbedModel(), loader(), cfg, torch.device("cpu"))
     assert result.shape == (1, 3)
+
+    cfg.eval.tta.scales = [1.0, 0.9]
+    cfg.model.spatial_multiple = 16
+    sized = SizeRecordModel()
+    embed_loader(sized, DataLoader(SquareImages(256), batch_size=1), cfg, torch.device("cpu"))
+    assert (256, 256) in sized.sizes
+    assert (224, 224) in sized.sizes
+    assert all(height % 16 == 0 and width % 16 == 0 for height, width in sized.sizes)
 
     cfg.eval.tta.enabled = False
     assert embed_loader(EmbedModel(as_dict=False), loader(), cfg, torch.device("cpu")).shape == (1, 3)

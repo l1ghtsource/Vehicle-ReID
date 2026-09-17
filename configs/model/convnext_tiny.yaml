@@ -14,6 +14,10 @@ feature_dims: null
 hidden_indices: null
 drop_path_rate: 0.1
 gradient_checkpointing: false
+# Smallest spatial multiple the backbone accepts (patch/window/stride).
+spatial_multiple: 32
+# Pass data.image_size into timm.create_model (required for Swin/ViT fixed-resolution weights).
+bind_image_size: false
 pooling:
   kind: gem
   p: 3.0

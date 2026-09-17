@@ -73,6 +73,17 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
     assert FakeTrainer.instances[-1].fit_args[2] is None
     assert json.loads((tmp_path / "run/run_summary.json").read_text())["best_checkpoint"] == "best.ckpt"
 
+    cfg.trainer.devices = 1
+    cfg.trainer.limit_val_batches = 1
+    FakeTrainer.global_zero = False
+    train.main.__wrapped__(cfg)
+    integer_limit = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert integer_limit.kwargs["monitor"] is None
+    assert integer_limit.kwargs["save_top_k"] == 0
+    cfg.trainer.limit_val_batches = 1.0
+    train.main.__wrapped__(cfg)
+    assert FakeTrainer.instances[-1].kwargs["callbacks"][0].kwargs["monitor"] == cfg.checkpointing.monitor
+
     dm = FakeDataModule(cfg)
     resume = tmp_path / "resume.ckpt"
     torch.save(

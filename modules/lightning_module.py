@@ -1,5 +1,6 @@
 import math
 import warnings
+from typing import Any
 
 import lightning as L
 import numpy as np
@@ -15,6 +16,18 @@ from .losses import LossCollection
 from .metrics import retrieval_metrics
 from .optim import build_optimizer, build_scheduler
 from .regularization import EMA, awp
+
+
+def is_partial_validation(limit: Any) -> bool:
+    if limit is None:
+        return False
+    if isinstance(limit, bool):
+        raise TypeError("trainer.limit_val_batches must be an int or float")
+    if isinstance(limit, int):
+        return True
+    if isinstance(limit, float):
+        return limit != 1.0
+    raise TypeError("trainer.limit_val_batches must be an int or float")
 
 
 class ReIDModule(L.LightningModule):
@@ -185,7 +198,7 @@ class ReIDModule(L.LightningModule):
             dm = self.data_module
             if len(index) != len(dm.val_set):
                 warnings.warn(
-                    "Partial validation: skipping mAP; set limit_val_batches=1.0 for honest metrics",
+                    "Partial validation: skipping mAP; set trainer.limit_val_batches=1.0 for honest metrics",
                     stacklevel=2,
                 )
                 self.log("val/partial", 1.0, sync_dist=False)

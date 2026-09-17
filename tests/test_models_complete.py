@@ -10,6 +10,7 @@ from torch import nn
 import models.backbones as backbones
 import models.reid as reid_module
 from models.backbones import Backbone, container_dict, load_state
+from models.input_size import scaled_hw, spatial_multiple, validate_image_geometry
 from models.pooling import Pool
 from models.reid import ReIDModel
 
@@ -109,6 +110,10 @@ def test_timm_backbone_paths(cfg, tmp_path, monkeypatch):
     assert model.dims == [3, 4]
     assert model.net.checkpointing
     assert calls[0][1]["features_only"] is True
+    assert "img_size" not in calls[0][1]
+    cfg.model.bind_image_size = True
+    Backbone(cfg.model, cfg.data.image_size)
+    assert calls[-1][1]["img_size"] == tuple(int(value) for value in cfg.data.image_size)
     out = model(torch.zeros(2, 3, 8, 8))
     assert [item.shape[1] for item in out] == [3, 4]
 
@@ -305,7 +310,65 @@ def test_every_model_config_forward(model_name, monkeypatch):
         config_dir=str(Path(__file__).resolve().parents[1] / "configs"),
     ):
         cfg = compose(config_name="config", overrides=[f"model={model_name}", "model.pretrained=false"])
+    if model_name == "llm2clip":
+        cfg.data.image_size = [336, 336]
     monkeypatch.setattr(reid_module, "Backbone", ConfigBackbone)
     model = ReIDModel(cfg)
     output = model(torch.randn(2, 3, 16, 16))
     assert output["embedding"].shape == (2, cfg.model.head.embedding_dim)
+
+
+def test_image_geometry_and_spatial_multiple(cfg):
+    cfg.model.backend = "custom"
+    assert spatial_multiple(cfg.model) == 1
+    cfg.model.backend = "timm"
+    cfg.model.spatial_multiple = None
+    assert spatial_multiple(cfg.model) == 1
+    cfg.model.spatial_multiple = 0
+    with pytest.raises(ValueError, match="spatial_multiple"):
+        spatial_multiple(cfg.model)
+    cfg.model.spatial_multiple = 16
+    assert scaled_hw(256, 256, 1.0, 16) == (256, 256)
+    assert scaled_hw(256, 256, 0.9, 16) == (224, 224)
+    with pytest.raises(ValueError, match="scales positive"):
+        scaled_hw(256, 256, 0.0, 16)
+
+    cfg.data.image_size = [0, 256]
+    with pytest.raises(ValueError, match="height, width"):
+        validate_image_geometry(cfg)
+    cfg.data.image_size = [256]
+    with pytest.raises(ValueError, match="height, width"):
+        validate_image_geometry(cfg)
+    cfg.data.image_size = [255, 255]
+    with pytest.raises(ValueError, match="divisible"):
+        validate_image_geometry(cfg)
+    cfg.data.image_size = [256, 256]
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.scales = [1.0, 0.9]
+    validate_image_geometry(cfg)
+    cfg.eval.tta.scales = [0.0]
+    with pytest.raises(ValueError, match="scales positive"):
+        validate_image_geometry(cfg)
+    cfg.eval.tta.scales = [1.0, 0.9]
+    cfg.model.backend = "llm2clip"
+    with pytest.raises(ValueError, match="336"):
+        validate_image_geometry(cfg)
+
+
+def test_backbone_rejects_incompatible_image_size(cfg, monkeypatch):
+    monkeypatch.setattr(backbones.timm, "create_model", lambda *args, **kwargs: DummyNet((4,)))
+    cfg.model.spatial_multiple = 32
+    with pytest.raises(ValueError, match="divisible"):
+        Backbone(cfg.model, [255, 255])
+
+
+def test_swin_config_aligns_with_data_size():
+    with initialize_config_dir(
+        version_base="1.3",
+        config_dir=str(Path(__file__).resolve().parents[1] / "configs"),
+    ):
+        cfg = compose(config_name="config", overrides=["model=swin"])
+    assert list(cfg.data.image_size) == [256, 256]
+    assert cfg.model.spatial_multiple == 32
+    assert cfg.model.bind_image_size is True
+    assert cfg.model.kwargs.strict_img_size is False

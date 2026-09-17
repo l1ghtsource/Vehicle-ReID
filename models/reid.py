@@ -3,12 +3,14 @@ from torch import nn
 from torch.nn import functional as F
 
 from .backbones import Backbone
+from .input_size import validate_image_geometry
 from .pooling import Pool
 
 
 class ReIDModel(nn.Module):
     def __init__(self, cfg, initialize_pretrained=True):
         super().__init__()
+        validate_image_geometry(cfg)
         self.cfg = cfg.model
         self.backbone = Backbone(cfg.model, cfg.data.image_size, initialize_pretrained)
         pools = [Pool(d, cfg.model.pooling, self.backbone.prefix) for d in self.backbone.dims]
