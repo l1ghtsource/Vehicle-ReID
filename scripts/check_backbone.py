@@ -56,7 +56,9 @@ def main():
         del model, x, out, loss
         gc.collect()
         torch.cuda.empty_cache()
-    Path("artifacts/backbone_checks.json").write_text(json.dumps(results, indent=2))
+    path = Path("artifacts/backbone_checks.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(results, indent=2))
 
 
 if __name__ == "__main__":

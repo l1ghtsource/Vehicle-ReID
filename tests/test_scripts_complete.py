@@ -135,7 +135,6 @@ class BadSmokeModel(SmokeModel):
 
 def test_check_backbone_main(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    Path("artifacts").mkdir()
     monkeypatch.setattr(check_backbone, "ReIDModel", SmokeModel)
     original_randn = torch.randn
     monkeypatch.setattr(
