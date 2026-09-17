@@ -4,16 +4,36 @@ from hydra.utils import instantiate
 from torch.optim.lr_scheduler import LambdaLR
 
 
+def backbone_layer_map(backbone):
+    last_numbered = "stem"
+    seen_numbered = False
+    stages = []
+    mapping = {}
+    for name, _ in backbone.named_parameters():
+        parts = name.split(".")
+        numbered = next(
+            (".".join(parts[: index + 1]) for index, part in enumerate(parts) if part.isdigit()),
+            None,
+        )
+        if numbered is not None:
+            last_numbered = numbered
+            seen_numbered = True
+            stage = numbered
+        elif seen_numbered:
+            stage = last_numbered
+        else:
+            stage = "stem"
+        mapping[name] = stage
+        if stage not in stages:
+            stages.append(stage)
+    return stages, mapping
+
+
 def build_optimizer(module, cfg):
     base_lr = float(cfg.optimizer.lr)
     decay = float(cfg.optimizer.get("weight_decay", 0))
+    stages, mapping = backbone_layer_map(module.model.backbone)
 
-    stages = []
-    for name, _ in module.model.backbone.named_parameters():
-        parts = name.split(".")
-        stage = next((".".join(parts[: i + 1]) for i, p in enumerate(parts) if p.isdigit()), "stem")
-        if stage not in stages:
-            stages.append(stage)
     groups = {}
     for name, p in module.named_parameters():
         if not p.requires_grad:
@@ -21,9 +41,7 @@ def build_optimizer(module, cfg):
         lr = base_lr
         if name.startswith("model.backbone."):
             lr *= cfg.train.backbone_lr_multiplier
-            short = name.removeprefix("model.backbone.")
-            parts = short.split(".")
-            stage = next((".".join(parts[: i + 1]) for i, x in enumerate(parts) if x.isdigit()), "stem")
+            stage = mapping[name.removeprefix("model.backbone.")]
             layer = stages.index(stage)
             lr *= cfg.train.layer_decay ** (len(stages) - 1 - layer)
         wd = 0.0 if cfg.train.no_weight_decay_bias_norm and (p.ndim <= 1 or name.endswith("bias")) else decay

@@ -581,6 +581,18 @@ def _optimizer_name(cfg: DictConfig) -> str:
     return {"adamw": "adamw", "sgd": "sgd", "lamb": "lamb", "lion": "lion"}[target]
 
 
+def _seed_eval_weights(cfg: DictConfig, path: Path) -> str:
+    choice = str(cfg.eval.weights)
+    if choice != "auto":
+        return choice
+    metrics_path = path.parent / "val" / "metrics.json"
+    if metrics_path.is_file():
+        recorded = json.loads(metrics_path.read_text()).get("weights")
+        if recorded in {"raw", "ema"}:
+            return str(recorded)
+    return "ema" if bool(cfg.train.ema.validate) else "raw"
+
+
 def params_from_config(path: Path, model: str) -> dict[str, Any]:
     loaded = OmegaConf.load(path)
     if not isinstance(loaded, DictConfig):
@@ -655,7 +667,7 @@ def params_from_config(path: Path, model: str) -> dict[str, Any]:
     contexts = cfg.eval.tta.context_pcts
     params["eval.tta.context_pct"] = 0.0 if contexts is None else max(float(value) for value in contexts)
     if cfg.train.ema.enabled:
-        params["eval.weights"] = "ema" if str(cfg.eval.weights) == "auto" else str(cfg.eval.weights)
+        params["eval.weights"] = _seed_eval_weights(cfg, path)
 
     for name in (
         "postproc.enabled",

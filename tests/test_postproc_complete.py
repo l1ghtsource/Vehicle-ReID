@@ -97,3 +97,15 @@ def test_postprocess_all_orchestration(monkeypatch):
     cfg.rerank.kind = "bad"
     with pytest.raises(ValueError, match="Unknown reranker"):
         postprocess(query, gallery, cfg)
+
+
+def test_k_reciprocal_k2_beyond_k1_is_permutation_stable():
+    rng = np.random.default_rng(0)
+    query = rng.normal(size=(4, 8)).astype(np.float32)
+    gallery = rng.normal(size=(12, 8)).astype(np.float32)
+    baseline = k_reciprocal(query, gallery, k1=5, k2=20)
+    order = rng.permutation(len(gallery))
+    shuffled = k_reciprocal(query, gallery[order], k1=5, k2=20)
+    restored = np.empty_like(shuffled)
+    restored[:, order] = shuffled
+    np.testing.assert_allclose(baseline, restored, atol=1e-5)

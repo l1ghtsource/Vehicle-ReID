@@ -7,6 +7,7 @@ import lightning as L
 import numpy as np
 import pandas as pd
 import torch
+from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
@@ -19,11 +20,28 @@ from modules.metrics import retrieval_metrics
 from postproc import postprocess
 
 
-def load_model(cfg):
-    if not cfg.checkpoint:
-        raise ValueError("Pass checkpoint=/path/to/checkpoint.ckpt")
-    checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
-    saved = OmegaConf.create(checkpoint["hyper_parameters"]["cfg"])
+def task_overrides() -> list[str]:
+    if not HydraConfig.initialized():
+        return []
+    task = getattr(getattr(HydraConfig.get(), "overrides", None), "task", None)
+    if not task:
+        return []
+    return [str(item) for item in task]
+
+
+def override_key(item: str) -> str | None:
+    text = str(item).strip()
+    if not text or text.startswith("~"):
+        return None
+    if text[0] in {"+", "@"}:
+        text = text[1:]
+    key = text.split("=", 1)[0]
+    if "." not in key:
+        return None
+    return key
+
+
+def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
     effective = OmegaConf.merge(
         saved,
         {
@@ -37,21 +55,26 @@ def load_model(cfg):
                 "save_distances": cfg.eval.save_distances,
                 "precision": cfg.eval.precision,
             },
-            "data": {
-                "root": cfg.data.root,
-                "train_csv": cfg.data.train_csv,
-                "query_csv": cfg.data.query_csv,
-                "gallery_csv": cfg.data.gallery_csv,
-                "image_dir": cfg.data.image_dir,
-                "folds_file": cfg.data.folds_file,
-                "fold": cfg.data.fold,
-                "num_workers": cfg.data.num_workers,
-                "batch_size_eval": cfg.data.batch_size_eval,
-                "verify_files": cfg.data.verify_files,
-                "pin_memory": cfg.data.pin_memory,
-            },
         },
     )
+    missing = object()
+    for item in task_overrides() if override_items is None else override_items:
+        key = override_key(item)
+        if key is None:
+            continue
+        value = OmegaConf.select(cfg, key, default=missing)
+        if value is missing:
+            continue
+        OmegaConf.update(effective, key, value, merge=True)
+    return effective
+
+
+def load_model(cfg, override_items: list[str] | None = None):
+    if not cfg.checkpoint:
+        raise ValueError("Pass checkpoint=/path/to/checkpoint.ckpt")
+    checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
+    saved = OmegaConf.create(checkpoint["hyper_parameters"]["cfg"])
+    effective = overlay_eval_config(saved, cfg, override_items)
     model = ReIDModel(effective, initialize_pretrained=False)
     choice = cfg.eval.weights
     if choice == "auto":

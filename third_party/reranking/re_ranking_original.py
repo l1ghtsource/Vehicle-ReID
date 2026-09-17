@@ -48,12 +48,10 @@ def re_ranking(q_g_dist, q_q_dist, g_g_dist, k1=20, k2=6, lambda_value=0.3):
     original_dist = np.power(original_dist, 2).astype(np.float32)
     original_dist = np.transpose(1. * original_dist/np.max(original_dist,axis = 0))
     V = np.zeros_like(original_dist).astype(np.float32)
-    #initial_rank = np.argsort(original_dist).astype(np.int32)
-    # top K1+1
-    initial_rank = np.argpartition( original_dist, range(1,k1+1) )
-
     query_num = q_g_dist.shape[0]
     all_num = original_dist.shape[0]
+    neighbor_k = int(min(max(k1 + 1, k2), all_num))
+    initial_rank = np.argpartition(original_dist, range(1, neighbor_k) if neighbor_k > 1 else 0)
 
     for i in range(all_num):
         # k-reciprocal neighbors

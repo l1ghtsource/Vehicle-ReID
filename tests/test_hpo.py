@@ -122,6 +122,26 @@ def test_seed_params_from_config(cfg, tmp_path):
     assert params["eval.weights"] == "ema"
     search_space.suggest_overrides(cast(optuna.Trial, optuna.trial.FixedTrial(params)), "convnext_tiny")
 
+    cfg.train.ema.validate = False
+    OmegaConf.save(cfg, path)
+    params = search_space.params_from_config(path, "convnext_tiny")
+    assert params["eval.weights"] == "raw"
+    metrics = path.parent / "val" / "metrics.json"
+    metrics.parent.mkdir()
+    metrics.write_text(json.dumps({"weights": "ema"}))
+    params = search_space.params_from_config(path, "convnext_tiny")
+    assert params["eval.weights"] == "ema"
+    metrics.write_text(json.dumps({"weights": "other"}))
+    params = search_space.params_from_config(path, "convnext_tiny")
+    assert params["eval.weights"] == "raw"
+    cfg.eval.weights = "raw"
+    cfg.train.ema.validate = True
+    OmegaConf.save(cfg, path)
+    params = search_space.params_from_config(path, "convnext_tiny")
+    assert params["eval.weights"] == "raw"
+    cfg.eval.weights = "auto"
+    cfg.train.ema.validate = True
+
     cfg.optimizer = OmegaConf.create(
         {
             "_target_": "torch.optim.SGD",

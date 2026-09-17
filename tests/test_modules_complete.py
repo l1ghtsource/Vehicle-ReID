@@ -13,7 +13,7 @@ import modules.losses.core as loss_core
 from modules.inference import embed_loader
 from modules.losses.core import AdaSP, LossCollection, Triplet
 from modules.metrics import retrieval_metrics
-from modules.optim import build_optimizer, build_scheduler
+from modules.optim import backbone_layer_map, build_optimizer, build_scheduler
 from modules.regularization import EMA, awp
 
 
@@ -55,6 +55,42 @@ def test_optimizer_groups_and_all_schedulers(cfg):
         scheduler.step()
         optimizer.step()
         scheduler.step()
+
+
+def test_layer_decay_assigns_output_norm_to_last_block(cfg):
+    class Backbone(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.patch = nn.Linear(2, 2, bias=False)
+            self.blocks = nn.ModuleList([nn.Linear(2, 2, bias=False) for _ in range(2)])
+            self.norm = nn.LayerNorm(2)
+
+    net = Backbone()
+
+    class Module(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.model = nn.Module()
+            self.model.backbone = net
+            self.head = nn.Linear(2, 2, bias=False)
+
+    module = Module()
+    stages, mapping = backbone_layer_map(net)
+    assert mapping["patch.weight"] == "stem"
+    assert mapping["blocks.0.weight"] == "blocks.0"
+    assert mapping["blocks.1.weight"] == "blocks.1"
+    assert mapping["norm.weight"] == "blocks.1"
+    assert stages[-1] == "blocks.1"
+    cfg.optimizer = OmegaConf.create({"_target_": "torch.optim.SGD", "lr": 0.1, "weight_decay": 0.0})
+    cfg.train.backbone_lr_multiplier = 1.0
+    cfg.train.layer_decay = 0.6
+    cfg.train.no_weight_decay_bias_norm = False
+    optimizer = build_optimizer(module, cfg)
+    rates = {id(parameter): group["lr"] for group in optimizer.param_groups for parameter in group["params"]}
+    last = rates[id(net.blocks[1].weight)]
+    assert rates[id(net.norm.weight)] == pytest.approx(last)
+    assert rates[id(net.patch.weight)] < rates[id(net.blocks[0].weight)]
+    assert rates[id(net.blocks[0].weight)] < last
 
 
 class EmbedModel(nn.Module):

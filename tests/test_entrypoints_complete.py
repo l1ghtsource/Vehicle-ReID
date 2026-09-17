@@ -175,8 +175,9 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
         raise TypeError("Expected mapping checkpoint config")
     eval_cfg = saved["eval"]
     postproc_cfg = saved["postproc"]
-    if not isinstance(eval_cfg, dict) or not isinstance(postproc_cfg, dict):
-        raise TypeError("Expected mapping eval/postproc config")
+    data_cfg = saved["data"]
+    if not isinstance(eval_cfg, dict) or not isinstance(postproc_cfg, dict) or not isinstance(data_cfg, dict):
+        raise TypeError("Expected mapping eval/postproc/data config")
     tta_cfg = eval_cfg["tta"]
     rerank_cfg = postproc_cfg["rerank"]
     if not isinstance(tta_cfg, dict) or not isinstance(rerank_cfg, dict):
@@ -185,6 +186,9 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     tta_cfg["scales"] = [1.0, 1.1]
     postproc_cfg["enabled"] = True
     rerank_cfg["kind"] = "k_reciprocal"
+    data_cfg["fold"] = 2
+    data_cfg["folds_file"] = "/ckpt/folds.csv"
+    data_cfg["root"] = "/ckpt/root"
     checkpoint["hyper_parameters"]["cfg"] = saved
     torch.save(checkpoint, path)
     cfg.eval.tta.enabled = False
@@ -192,13 +196,43 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     cfg.postproc.enabled = False
     cfg.postproc.rerank.kind = "none"
     cfg.data.root = "/custom/root"
+    cfg.data.fold = 0
+    cfg.data.folds_file = "/cli/folds.csv"
     cfg.eval.weights = "raw"
-    _, effective, _, _ = eval_module.load_model(cfg)
+    _, effective, _, _ = eval_module.load_model(cfg, [])
     assert bool(effective.eval.tta.enabled) is True
     assert [float(scale) for scale in effective.eval.tta.scales] == [1.0, 1.1]
     assert bool(effective.postproc.enabled) is True
     assert str(effective.postproc.rerank.kind) == "k_reciprocal"
+    assert int(effective.data.fold) == 2
+    assert str(effective.data.folds_file) == "/ckpt/folds.csv"
+    assert str(effective.data.root) == "/ckpt/root"
+
+    cfg.eval.tta.enabled = True
+    cfg.postproc.enabled = True
+    cfg.postproc.rerank.kind = "gnn"
+    cfg.data.fold = 1
+    cfg.data.root = "/custom/root"
+    _, effective, _, _ = eval_module.load_model(
+        cfg,
+        [
+            "eval.tta.enabled=true",
+            "postproc.enabled=true",
+            "postproc.rerank.kind=gnn",
+            "data.fold=1",
+            "data.root=/custom/root",
+            "experiment=smoke",
+            "~trainer.devices",
+            "+data.foo=1",
+            "missing.path=1",
+        ],
+    )
+    assert bool(effective.eval.tta.enabled) is True
+    assert bool(effective.postproc.enabled) is True
+    assert str(effective.postproc.rerank.kind) == "gnn"
+    assert int(effective.data.fold) == 1
     assert str(effective.data.root) == "/custom/root"
+    assert str(effective.data.folds_file) == "/ckpt/folds.csv"
 
 
 class EvalModel(nn.Module):
@@ -276,6 +310,39 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="differs"):
         eval_module.main.__wrapped__(data_cfg)
     torch.use_deterministic_algorithms(False)
+
+
+def test_eval_override_helpers(monkeypatch):
+    assert eval_module.task_overrides() == []
+    assert eval_module.override_key("") is None
+    assert eval_module.override_key("~data.fold") is None
+    assert eval_module.override_key("experiment=smoke") is None
+    assert eval_module.override_key("+data.fold=2") == "data.fold"
+    assert eval_module.override_key("@eval.tta.enabled=true") == "eval.tta.enabled"
+
+    class FakeHydra:
+        @staticmethod
+        def initialized():
+            return True
+
+        @staticmethod
+        def get():
+            return SimpleNamespace(overrides=SimpleNamespace(task=["eval.tta.enabled=true"]))
+
+    monkeypatch.setattr(eval_module, "HydraConfig", FakeHydra)
+    assert eval_module.task_overrides() == ["eval.tta.enabled=true"]
+
+    class EmptyHydra:
+        @staticmethod
+        def initialized():
+            return True
+
+        @staticmethod
+        def get():
+            return SimpleNamespace(overrides=SimpleNamespace(task=None))
+
+    monkeypatch.setattr(eval_module, "HydraConfig", EmptyHydra)
+    assert eval_module.task_overrides() == []
 
 
 def test_entrypoint_main_guards(monkeypatch):

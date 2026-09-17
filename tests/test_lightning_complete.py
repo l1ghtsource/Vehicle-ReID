@@ -9,6 +9,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 import modules.lightning_module as lightning_module
+from dataset import ReIDDataModule
 from modules.lightning_module import ReIDModule, is_partial_validation, scheduler_horizon
 from modules.regularization import EMA
 
@@ -73,9 +74,68 @@ def test_scheduler_horizon_uses_max_steps_without_double_accumulation(cfg):
     per_epoch, total = scheduler_horizon(trainer(num_training_batches=float("inf"), max_steps=7), cfg)
     assert per_epoch == 1
     assert total == 7
+    per_epoch, total = scheduler_horizon(
+        trainer(num_training_batches=float("inf"), max_steps=5, train_dataloader=object()),
+        cfg,
+    )
+    assert total == 5
     per_epoch, total = scheduler_horizon(trainer(num_training_batches=None, max_steps=None), cfg)
     assert per_epoch == 1
     assert total == 1
+
+
+def test_scheduler_horizon_setups_train_loader_when_batches_unknown(cfg):
+    fake = SimpleNamespace(num_training_batches=float("inf"), max_steps=-1, train_dataloader=None)
+
+    class Loop:
+        def setup_data(self):
+            fake.num_training_batches = 3
+            fake.train_dataloader = object()
+
+    fake.fit_loop = Loop()
+    cfg.train.epochs = 2
+    cfg.train.accumulate_grad_batches = 2
+    per_epoch, total = scheduler_horizon(cast(L.Trainer, fake), cfg)
+    assert per_epoch == 2
+    assert total == 4
+
+
+def test_scheduler_horizon_from_trainer_fit(data_cfg, monkeypatch):
+    monkeypatch.setattr(lightning_module, "ReIDModel", TinyReID)
+    data_cfg.train.epochs = 2
+    data_cfg.train.accumulate_grad_batches = 2
+    data_cfg.data.sampler.steps_per_epoch = 3
+    data_cfg.train.rdrop.enabled = False
+    data_cfg.train.awp.enabled = False
+    data_cfg.train.ema.enabled = False
+    dm = ReIDDataModule(data_cfg)
+    dm.prepare_data()
+    dm.setup("fit")
+    module = ReIDModule(data_cfg, dm.num_classes, data_module=dm)
+    captured = {}
+    original = lightning_module.build_scheduler
+
+    def capture(optimizer, cfg, steps_per_epoch, total_steps=None):
+        captured["per_epoch"] = steps_per_epoch
+        captured["total"] = total_steps
+        return original(optimizer, cfg, steps_per_epoch, total_steps)
+
+    monkeypatch.setattr(lightning_module, "build_scheduler", capture)
+    trainer = L.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=2,
+        max_steps=-1,
+        logger=False,
+        enable_checkpointing=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        limit_val_batches=0,
+        num_sanity_val_steps=0,
+    )
+    trainer.fit(module, datamodule=dm)
+    assert captured["per_epoch"] == 2
+    assert captured["total"] == 4
 
 
 def test_partial_validation_limit_types():

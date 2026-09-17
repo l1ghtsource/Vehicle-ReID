@@ -18,9 +18,20 @@ from .optim import build_optimizer, build_scheduler
 from .regularization import EMA, awp
 
 
+def _training_batches(trainer):
+    batches = getattr(trainer, "num_training_batches", None)
+    if batches is not None and batches != float("inf"):
+        return batches
+    if getattr(trainer, "train_dataloader", None) is None:
+        setup = getattr(getattr(trainer, "fit_loop", None), "setup_data", None)
+        if callable(setup):
+            setup()
+    return getattr(trainer, "num_training_batches", None)
+
+
 def scheduler_horizon(trainer, cfg) -> tuple[int, int]:
     accumulate = max(1, int(cfg.train.accumulate_grad_batches))
-    batches = trainer.num_training_batches
+    batches = _training_batches(trainer)
     if batches is None or batches == float("inf"):
         per_epoch = 1
         total = int(trainer.max_steps) if trainer.max_steps not in {-1, None} else 1
