@@ -24,8 +24,11 @@ def embed_loader(model, loader, cfg, device):
         x = batch["image"].to(device, non_blocking=True)
         embeddings = []
         for scale in scales:
-            size = scaled_hw(int(x.shape[-2]), int(x.shape[-1]), float(scale), multiple)
             native = (int(x.shape[-2]), int(x.shape[-1]))
+            if str(cfg.model.backend) == "llm2clip":
+                size = native
+            else:
+                size = scaled_hw(native[0], native[1], float(scale), multiple)
             z = x if size == native else F.interpolate(x, size=size, mode="bilinear", align_corners=False)
             for angle in angles:
                 zr = rotate(z, angle, interpolation=InterpolationMode.BILINEAR) if angle else z

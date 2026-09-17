@@ -3,6 +3,7 @@ import math
 
 import torch
 from hydra.utils import get_class, instantiate
+from pytorch_metric_learning.distances import LpDistance
 from pytorch_metric_learning.losses import TripletMarginLoss
 from torch import nn
 from torch.nn import functional as F
@@ -63,7 +64,11 @@ class Triplet(nn.Module):
         if not valid.any():
             return x.sum() * 0
         if self.mining == "all":
-            return TripletMarginLoss(margin=self.margin, smooth_loss=self.soft)(x, y)
+            return TripletMarginLoss(
+                margin=self.margin,
+                smooth_loss=self.soft,
+                distance=LpDistance(normalize_embeddings=False),
+            )(x, y)
         if self.mining == "weighted":
             dp = (torch.softmax(dist.masked_fill(~pos, -1e9), 1) * dist).sum(1)
             dn = (torch.softmax((-dist).masked_fill(~neg, -1e9), 1) * dist).sum(1)

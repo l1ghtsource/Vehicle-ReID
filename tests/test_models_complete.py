@@ -277,12 +277,26 @@ def test_pooling_guards():
 
 def test_reid_freeze_and_local_guard(cfg):
     model = ReIDModel(cfg)
+    model.train()
+    bn = next(module for module in model.backbone.modules() if isinstance(module, nn.BatchNorm2d))
     model.freeze_backbone(True)
     assert model.frozen
+    assert not model.backbone.training
     assert not any(parameter.requires_grad for parameter in model.backbone.parameters())
+    before = bn.num_batches_tracked
+    assert before is not None
+    tracked = before.detach().clone()
     assert model(torch.randn(2, 3, 64, 64))["embedding"].shape[0] == 2
+    frozen_count = bn.num_batches_tracked
+    assert frozen_count is not None
+    assert torch.equal(frozen_count, tracked)
     model.freeze_backbone(False)
+    assert model.backbone.training
     assert all(parameter.requires_grad for parameter in model.backbone.parameters())
+    model(torch.randn(2, 3, 64, 64))
+    after = bn.num_batches_tracked
+    assert after is not None
+    assert int(after.item()) == int(tracked.item()) + 1
 
     cfg.model.head.local_parts = 100
     model = ReIDModel(cfg)
@@ -353,6 +367,12 @@ def test_image_geometry_and_spatial_multiple(cfg):
     cfg.model.backend = "llm2clip"
     with pytest.raises(ValueError, match="336"):
         validate_image_geometry(cfg)
+    cfg.data.image_size = [336, 336]
+    cfg.model.spatial_multiple = 14
+    with pytest.raises(ValueError, match="scale TTA"):
+        validate_image_geometry(cfg)
+    cfg.eval.tta.scales = [1.0]
+    validate_image_geometry(cfg)
 
 
 def test_backbone_rejects_incompatible_image_size(cfg, monkeypatch):

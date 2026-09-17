@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 from torch.utils.data import DataLoader
 
 from augmentations import build_transforms
-from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations
+from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
 from dataset.images import VehicleDataset
 from models import ReIDModel
 from modules.inference import embed_loader
@@ -24,22 +24,31 @@ def load_model(cfg):
         raise ValueError("Pass checkpoint=/path/to/checkpoint.ckpt")
     checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
     saved = OmegaConf.create(checkpoint["hyper_parameters"]["cfg"])
-
     effective = OmegaConf.merge(
         saved,
         {
-            "eval": OmegaConf.to_container(cfg.eval, resolve=True),
-            "postproc": OmegaConf.to_container(cfg.postproc, resolve=True),
             "checkpoint": cfg.checkpoint,
+            "eval": {
+                "split": cfg.eval.split,
+                "device": cfg.eval.device,
+                "output_dir": cfg.eval.output_dir,
+                "weights": cfg.eval.weights,
+                "top_k": cfg.eval.top_k,
+                "save_distances": cfg.eval.save_distances,
+                "precision": cfg.eval.precision,
+            },
             "data": {
                 "root": cfg.data.root,
                 "train_csv": cfg.data.train_csv,
                 "query_csv": cfg.data.query_csv,
                 "gallery_csv": cfg.data.gallery_csv,
                 "image_dir": cfg.data.image_dir,
+                "folds_file": cfg.data.folds_file,
+                "fold": cfg.data.fold,
                 "num_workers": cfg.data.num_workers,
                 "batch_size_eval": cfg.data.batch_size_eval,
                 "verify_files": cfg.data.verify_files,
+                "pin_memory": cfg.data.pin_memory,
             },
         },
     )
@@ -73,7 +82,16 @@ def main(cfg):
         folds = ensure_folds(cfg)
         if checkpoint.get("data_fingerprint") != fingerprint(folds):
             raise ValueError("Validation data differs from checkpoint dataset")
+        saved_split = checkpoint.get("split_fingerprint")
+        if saved_split is not None and saved_split != split_fingerprint(folds):
+            raise ValueError("Validation fold assignment differs from the checkpoint split")
         va = folds[folds.fold == cfg.data.fold].reset_index(drop=True)
+        label_map = checkpoint.get("label_map") or {}
+        train_ids = {int(identity) for identity in label_map}
+        if not train_ids:
+            raise ValueError("Checkpoint is missing label_map; cannot verify identity-disjoint eval")
+        if train_ids & set(va.vehicle_id.astype(int)):
+            raise ValueError("Validation identities overlap the checkpoint training split")
         q, g = query_gallery_split(
             va, cfg.seed, cfg.data.validation.query_per_identity, cfg.data.validation.cross_camera
         )

@@ -12,7 +12,7 @@ from torch import nn
 
 import eval as eval_module
 import train
-from dataset.folds import ensure_folds, fingerprint
+from dataset.folds import ensure_folds, fingerprint, split_fingerprint
 
 
 class FakeDataModule:
@@ -71,6 +71,8 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
     train.main.__wrapped__(cfg)
     assert FakeTrainer.instances[-1].kwargs["strategy"] == "ddp_find_unused_parameters_true"
     assert FakeTrainer.instances[-1].fit_args[2] is None
+    callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert callback.kwargs["dirpath"] == tmp_path / "run" / "checkpoints"
     assert json.loads((tmp_path / "run/run_summary.json").read_text())["best_checkpoint"] == "best.ckpt"
 
     cfg.trainer.devices = 1
@@ -96,6 +98,19 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
     FakeTrainer.global_zero = False
     train.main.__wrapped__(cfg)
     assert FakeTrainer.instances[-1].fit_args[2] == str(resume)
+    callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert callback.kwargs["dirpath"] == resume.resolve().parent
+
+    torch.save(
+        {
+            "data_fingerprint": fingerprint(dm.folds),
+            "split_fingerprint": "wrong",
+            "label_map": dm.label_map,
+        },
+        resume,
+    )
+    with pytest.raises(ValueError, match="unsafe resume"):
+        train.main.__wrapped__(cfg)
 
     torch.save({"data_fingerprint": "wrong", "label_map": dm.label_map}, resume)
     with pytest.raises(ValueError, match="unsafe resume"):
@@ -155,6 +170,36 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="auto/raw/ema"):
         eval_module.load_model(cfg)
 
+    saved = OmegaConf.to_container(cfg, resolve=True)
+    if not isinstance(saved, dict):
+        raise TypeError("Expected mapping checkpoint config")
+    eval_cfg = saved["eval"]
+    postproc_cfg = saved["postproc"]
+    if not isinstance(eval_cfg, dict) or not isinstance(postproc_cfg, dict):
+        raise TypeError("Expected mapping eval/postproc config")
+    tta_cfg = eval_cfg["tta"]
+    rerank_cfg = postproc_cfg["rerank"]
+    if not isinstance(tta_cfg, dict) or not isinstance(rerank_cfg, dict):
+        raise TypeError("Expected mapping tta/rerank config")
+    tta_cfg["enabled"] = True
+    tta_cfg["scales"] = [1.0, 1.1]
+    postproc_cfg["enabled"] = True
+    rerank_cfg["kind"] = "k_reciprocal"
+    checkpoint["hyper_parameters"]["cfg"] = saved
+    torch.save(checkpoint, path)
+    cfg.eval.tta.enabled = False
+    cfg.eval.tta.scales = [1.0]
+    cfg.postproc.enabled = False
+    cfg.postproc.rerank.kind = "none"
+    cfg.data.root = "/custom/root"
+    cfg.eval.weights = "raw"
+    _, effective, _, _ = eval_module.load_model(cfg)
+    assert bool(effective.eval.tta.enabled) is True
+    assert [float(scale) for scale in effective.eval.tta.scales] == [1.0, 1.1]
+    assert bool(effective.postproc.enabled) is True
+    assert str(effective.postproc.rerank.kind) == "k_reciprocal"
+    assert str(effective.data.root) == "/custom/root"
+
 
 class EvalModel(nn.Module):
     def forward(self, image):
@@ -169,7 +214,13 @@ def fake_embeddings(model, loader, cfg, device):
 
 def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     folds = ensure_folds(data_cfg)
-    checkpoint = {"data_fingerprint": fingerprint(folds)}
+    val_ids = set(folds[folds.fold == data_cfg.data.fold].vehicle_id.astype(int))
+    train_ids = sorted(set(folds.vehicle_id.astype(int)) - val_ids)
+    checkpoint = {
+        "data_fingerprint": fingerprint(folds),
+        "split_fingerprint": split_fingerprint(folds),
+        "label_map": {int(pid): index for index, pid in enumerate(train_ids)},
+    }
     monkeypatch.setattr(
         eval_module,
         "load_model",
@@ -208,6 +259,19 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
         eval_module.main.__wrapped__(data_cfg)
 
     data_cfg.eval.split = "val"
+    checkpoint["label_map"] = {}
+    with pytest.raises(ValueError, match="label_map"):
+        eval_module.main.__wrapped__(data_cfg)
+    checkpoint["label_map"] = {int(pid): 0 for pid in val_ids}
+    with pytest.raises(ValueError, match="overlap"):
+        eval_module.main.__wrapped__(data_cfg)
+    checkpoint["label_map"] = {int(pid): index for index, pid in enumerate(train_ids)}
+    permuted = folds.copy()
+    permuted["fold"] = (permuted.fold + 1) % (int(permuted.fold.max()) + 1)
+    permuted.to_csv(data_cfg.data.folds_file, index=False)
+    with pytest.raises(ValueError, match="fold assignment"):
+        eval_module.main.__wrapped__(data_cfg)
+    folds.to_csv(data_cfg.data.folds_file, index=False)
     checkpoint["data_fingerprint"] = "wrong"
     with pytest.raises(ValueError, match="differs"):
         eval_module.main.__wrapped__(data_cfg)

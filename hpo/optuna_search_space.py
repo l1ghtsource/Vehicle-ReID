@@ -306,6 +306,10 @@ def _append(overrides: list[str], path: str, value: Any) -> None:
     overrides.append(f"{path}={_value(value)}")
 
 
+def _loss_param(loss_name: str, path: str) -> str:
+    return f"{loss_name}/{path}"
+
+
 def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
     overrides = []
     for path, spec in BASE_SPECS.items():
@@ -331,18 +335,20 @@ def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
     loss_name = trial.suggest_categorical("loss", LOSS_PRESETS)
     overrides.append(f"loss={loss_name}")
     for index in range(LOSS_TERM_COUNTS[loss_name]):
+        weight_name = _loss_param(loss_name, f"loss.terms.{index}.weight")
+        feature_name = _loss_param(loss_name, f"loss.terms.{index}.feature")
         _append(
             overrides,
             f"loss.terms.{index}.weight",
-            trial.suggest_float(f"loss.terms.{index}.weight", 0.1, 3.0, log=True),
+            trial.suggest_float(weight_name, 0.1, 3.0, log=True),
         )
         _append(
             overrides,
             f"loss.terms.{index}.feature",
-            trial.suggest_categorical(f"loss.terms.{index}.feature", ["raw", "neck"]),
+            trial.suggest_categorical(feature_name, ["raw", "neck"]),
         )
     for path, spec in LOSS_PARAM_SPECS[loss_name].items():
-        _append(overrides, path, _sample(trial, path, spec))
+        _append(overrides, path, _sample(trial, _loss_param(loss_name, path), spec))
 
     sampler_kind = "pk"
     if loss_name not in ADASP_LOSSES:
@@ -462,7 +468,10 @@ def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
         trial.suggest_categorical("eval.tta.hflip", [False, True]),
     )
     scale_delta = trial.suggest_float("eval.tta.scale_delta", 0.0, 0.2)
-    _append(overrides, "eval.tta.scales", [1.0 - scale_delta, 1.0, 1.0 + scale_delta])
+    if model == "llm2clip":
+        _append(overrides, "eval.tta.scales", [1.0])
+    else:
+        _append(overrides, "eval.tta.scales", [1.0 - scale_delta, 1.0, 1.0 + scale_delta])
     rotation = trial.suggest_int("eval.tta.rotation", 0, 12)
     _append(overrides, "eval.tta.rotations", [-rotation, 0, rotation])
     tta_context = trial.suggest_float("eval.tta.context_pct", 0.0, 30.0)
@@ -586,10 +595,10 @@ def params_from_config(path: Path, model: str) -> dict[str, Any]:
     loss_name = _loss_name(cfg)
     params["loss"] = loss_name
     for index in range(LOSS_TERM_COUNTS[loss_name]):
-        params[f"loss.terms.{index}.weight"] = float(cfg.loss.terms[index].weight)
-        params[f"loss.terms.{index}.feature"] = str(cfg.loss.terms[index].feature)
+        params[_loss_param(loss_name, f"loss.terms.{index}.weight")] = float(cfg.loss.terms[index].weight)
+        params[_loss_param(loss_name, f"loss.terms.{index}.feature")] = str(cfg.loss.terms[index].feature)
     for name in LOSS_PARAM_SPECS[loss_name]:
-        params[name] = _config_value(cfg, name)
+        params[_loss_param(loss_name, name)] = _config_value(cfg, name)
     if loss_name not in ADASP_LOSSES:
         params["data.sampler.kind"] = str(cfg.data.sampler.kind)
 

@@ -41,7 +41,7 @@ def test_optimizer_groups_and_all_schedulers(cfg):
     for kind in ("cosine", "linear", "multistep", "constant"):
         cfg.scheduler.kind = kind
         cfg.scheduler.warmup_epochs = 1
-        scheduler = build_scheduler(optimizer, cfg, 2)
+        scheduler = build_scheduler(optimizer, cfg, 2, total_steps=3)
         values = []
         for _ in range(5):
             optimizer.step()
@@ -120,6 +120,15 @@ def test_embed_loader_tta_and_guards(cfg, monkeypatch):
     assert (256, 256) in sized.sizes
     assert (224, 224) in sized.sizes
     assert all(height % 16 == 0 and width % 16 == 0 for height, width in sized.sizes)
+
+    cfg.model.backend = "llm2clip"
+    cfg.eval.tta.scales = [1.0, 0.9]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    llm = SizeRecordModel()
+    embed_loader(llm, DataLoader(SquareImages(336), batch_size=1), cfg, torch.device("cpu"))
+    assert llm.sizes == [(336, 336), (336, 336)]
+    cfg.model.backend = "timm"
 
     cfg.eval.tta.enabled = False
     assert embed_loader(EmbedModel(as_dict=False), loader(), cfg, torch.device("cpu")).shape == (1, 3)

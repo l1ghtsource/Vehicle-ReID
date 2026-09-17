@@ -55,6 +55,22 @@ def test_triplet_mining(mining):
     assert torch.isfinite(loss) and torch.isfinite(x.grad).all()
 
 
+def test_triplet_all_honors_normalize_false():
+    x = torch.tensor(
+        [
+            [1.0, 0.0],
+            [3.0, 0.0],
+            [0.0, 1.0],
+            [0.0, 3.0],
+        ]
+    )
+    y = torch.tensor([0, 0, 1, 1])
+    normalized = Triplet(margin=0.3, mining="all", normalize=True)(x, y)
+    raw = Triplet(margin=0.3, mining="all", normalize=False)(x, y)
+    assert float(normalized) == pytest.approx(0.0, abs=1e-6)
+    assert float(raw) > 0.0
+
+
 def test_adasp_rejects_unbalanced_and_permutation_invariance():
     loss = AdaSP()
     x = torch.randn(8, 5)

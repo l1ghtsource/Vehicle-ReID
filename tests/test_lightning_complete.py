@@ -9,7 +9,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 import modules.lightning_module as lightning_module
-from modules.lightning_module import ReIDModule, is_partial_validation
+from modules.lightning_module import ReIDModule, is_partial_validation, scheduler_horizon
 from modules.regularization import EMA
 
 
@@ -59,6 +59,23 @@ def trainer(**kwargs):
     }
     values.update(kwargs)
     return cast(L.Trainer, SimpleNamespace(**values))
+
+
+def test_scheduler_horizon_uses_max_steps_without_double_accumulation(cfg):
+    cfg.train.epochs = 2
+    cfg.train.accumulate_grad_batches = 2
+    per_epoch, total = scheduler_horizon(trainer(num_training_batches=3, max_steps=3), cfg)
+    assert per_epoch == 2
+    assert total == 3
+    per_epoch, total = scheduler_horizon(trainer(num_training_batches=3, max_steps=100), cfg)
+    assert per_epoch == 2
+    assert total == 4
+    per_epoch, total = scheduler_horizon(trainer(num_training_batches=float("inf"), max_steps=7), cfg)
+    assert per_epoch == 1
+    assert total == 7
+    per_epoch, total = scheduler_horizon(trainer(num_training_batches=None, max_steps=None), cfg)
+    assert per_epoch == 1
+    assert total == 1
 
 
 def test_partial_validation_limit_types():
@@ -265,6 +282,7 @@ def test_ema_validation_checkpoint_and_exception(cfg, monkeypatch):
     module.on_save_checkpoint(checkpoint)
     assert checkpoint["validation_weights"] == "ema"
     assert "data_fingerprint" in checkpoint
+    assert "split_fingerprint" in checkpoint
     module.on_load_checkpoint(checkpoint)
     assert module.ema_pending is not None
 

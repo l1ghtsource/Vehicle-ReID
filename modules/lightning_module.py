@@ -9,13 +9,28 @@ import torch.distributed as dist
 from omegaconf import OmegaConf
 
 from dataset.datamodule import ReIDDataModule
-from dataset.folds import fingerprint
+from dataset.folds import fingerprint, split_fingerprint
 from models import ReIDModel
 
 from .losses import LossCollection
 from .metrics import retrieval_metrics
 from .optim import build_optimizer, build_scheduler
 from .regularization import EMA, awp
+
+
+def scheduler_horizon(trainer, cfg) -> tuple[int, int]:
+    accumulate = max(1, int(cfg.train.accumulate_grad_batches))
+    batches = trainer.num_training_batches
+    if batches is None or batches == float("inf"):
+        per_epoch = 1
+        total = int(trainer.max_steps) if trainer.max_steps not in {-1, None} else 1
+        return per_epoch, max(1, total)
+    per_epoch = max(1, math.ceil(int(batches) / accumulate))
+    total = per_epoch * int(cfg.train.epochs)
+    max_steps = getattr(trainer, "max_steps", -1)
+    if max_steps is not None and int(max_steps) != -1:
+        total = min(total, int(max_steps))
+    return per_epoch, max(1, total)
 
 
 def is_partial_validation(limit: Any) -> bool:
@@ -70,12 +85,8 @@ class ReIDModule(L.LightningModule):
         trainer = self._trainer
         if trainer is None:
             raise RuntimeError("configure_optimizers requires an attached Trainer")
-        steps = math.ceil(
-            trainer.estimated_stepping_batches
-            / self.cfg.train.epochs
-            / self.cfg.train.accumulate_grad_batches
-        )
-        self.schedule = build_scheduler(opt, self.cfg, max(1, steps))
+        per_epoch, total = scheduler_horizon(trainer, self.cfg)
+        self.schedule = build_scheduler(opt, self.cfg, per_epoch, total)
         return {"optimizer": opt, "lr_scheduler": {"scheduler": self.schedule, "interval": "step"}}
 
     def on_fit_start(self):
@@ -229,6 +240,7 @@ class ReIDModule(L.LightningModule):
         checkpoint["validation_weights"] = "ema" if self.ema and self.cfg.train.ema.validate else "raw"
         if self.data_module is not None:
             checkpoint["data_fingerprint"] = fingerprint(self.data_module.folds)
+            checkpoint["split_fingerprint"] = split_fingerprint(self.data_module.folds)
             checkpoint["label_map"] = self.data_module.label_map
 
     def on_load_checkpoint(self, checkpoint):

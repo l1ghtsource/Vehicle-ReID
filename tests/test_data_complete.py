@@ -14,7 +14,14 @@ from torch.utils.data import DistributedSampler, RandomSampler
 
 from augmentations.pipeline import Pipeline, build_transforms
 from dataset.datamodule import ReIDDataModule
-from dataset.folds import ensure_folds, make_folds, query_gallery_split, read_annotations
+from dataset.folds import (
+    ensure_folds,
+    fingerprint,
+    make_folds,
+    query_gallery_split,
+    read_annotations,
+    split_fingerprint,
+)
 from dataset.images import VehicleDataset, crop_bbox, image_path
 from dataset.samplers import PKBatchSampler
 
@@ -40,6 +47,37 @@ def test_read_annotations_validation(tmp_path):
     valid.to_csv(path, index=False)
     with pytest.raises(ValueError):
         read_annotations(path, labeled=True)
+
+
+def test_split_fingerprint_includes_fold_assignment():
+    frame = pd.DataFrame(
+        [
+            {
+                "image_id": "a",
+                "x": 0,
+                "y": 0,
+                "w": 1,
+                "h": 1,
+                "vehicle_id": 1,
+                "camera_id": 0,
+                "fold": 0,
+            },
+            {
+                "image_id": "b",
+                "x": 0,
+                "y": 0,
+                "w": 1,
+                "h": 1,
+                "vehicle_id": 2,
+                "camera_id": 0,
+                "fold": 1,
+            },
+        ]
+    )
+    swapped = frame.copy()
+    swapped["fold"] = [1, 0]
+    assert fingerprint(frame) == fingerprint(swapped)
+    assert split_fingerprint(frame) != split_fingerprint(swapped)
 
 
 def test_make_folds_and_query_edge_cases():

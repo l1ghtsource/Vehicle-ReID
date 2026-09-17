@@ -243,7 +243,20 @@ def test_pretrain_main_all_paths(data_cfg, tmp_path, monkeypatch):
     FakeTrainer.global_zero = False
     pretrain_module.main.__wrapped__(cfg)
     assert FakeTrainer.instances[-1].fit_args[2] == str(resume)
+    callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert callback.kwargs["dirpath"] == resume.resolve().parent
     assert not summary_path.exists()
+
+    torch.save(
+        {
+            "data_fingerprint": fingerprint(dm.folds),
+            "split_fingerprint": "wrong",
+            "label_map": dm.label_map,
+        },
+        resume,
+    )
+    with pytest.raises(ValueError, match="different pretraining data"):
+        pretrain_module.main.__wrapped__(cfg)
 
     torch.save({"data_fingerprint": "wrong", "label_map": dm.label_map}, resume)
     with pytest.raises(ValueError, match="different pretraining data"):

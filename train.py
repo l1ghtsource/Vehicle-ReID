@@ -11,7 +11,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from dataset import ReIDDataModule
-from dataset.folds import fingerprint
+from dataset.folds import fingerprint, split_fingerprint
 from modules.lightning_module import ReIDModule, is_partial_validation
 
 
@@ -74,11 +74,17 @@ def main(cfg):
             or checkpoint.get("label_map") != dm.label_map
         ):
             raise ValueError("Resume checkpoint belongs to different data/fold; refusing unsafe resume")
+        saved_split = checkpoint.get("split_fingerprint")
+        if saved_split is not None and saved_split != split_fingerprint(dm.folds):
+            raise ValueError("Resume checkpoint belongs to different data/fold; refusing unsafe resume")
     args = container_dict(cfg.trainer)
 
     partial = is_partial_validation(args["limit_val_batches"])
+    ckpt_dir = out / "checkpoints"
+    if cfg.resume:
+        ckpt_dir = Path(cfg.resume).resolve().parent
     checkpoint = ModelCheckpoint(
-        dirpath=out / "checkpoints",
+        dirpath=ckpt_dir,
         filename="epoch{epoch:03d}",
         monitor=None if partial else cfg.checkpointing.monitor,
         mode=cfg.checkpointing.mode,

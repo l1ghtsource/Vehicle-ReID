@@ -16,6 +16,12 @@ import scripts.download_weights as download_weights
 import scripts.prepare_folds as prepare_folds
 
 
+def test_train_folds_forwards_overrides_to_eval():
+    script = (Path(__file__).resolve().parents[1] / "scripts/train_folds.sh").read_text()
+    eval_block = script.split('"$PYTHON" eval.py', 1)[1].split("fold_dir/eval.log", 1)[0]
+    assert '"$@"' in eval_block
+
+
 def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
     first = tmp_path / "fold0.json"
     second = tmp_path / "fold1.json"

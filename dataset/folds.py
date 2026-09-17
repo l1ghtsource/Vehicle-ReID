@@ -13,6 +13,11 @@ def fingerprint(df):
     return hashlib.sha256(df[cols].to_csv(index=False).encode()).hexdigest()
 
 
+def split_fingerprint(df):
+    cols = [c for c in ["image_id", "x", "y", "w", "h", "vehicle_id", "camera_id", "fold"] if c in df]
+    return hashlib.sha256(df[cols].to_csv(index=False).encode()).hexdigest()
+
+
 def read_annotations(path, labeled=False):
     df = pd.read_csv(path, dtype={"image_id": str})
     needed = {"image_id", "x", "y", "w", "h"} | ({"vehicle_id"} if labeled else set())

@@ -34,8 +34,7 @@ class ReIDModel(nn.Module):
     def freeze_backbone(self, frozen):
         self.frozen = frozen
         self.backbone.requires_grad_(not frozen)
-        if frozen:
-            self.backbone.eval()
+        self.backbone.train(not frozen)
 
     def forward(self, x):
         if self.frozen:

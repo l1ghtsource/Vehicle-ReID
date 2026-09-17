@@ -43,4 +43,6 @@ def validate_image_geometry(cfg) -> None:
     if not tta.enabled:
         return
     for scale in tta.scales:
+        if backend == "llm2clip" and float(scale) != 1.0:
+            raise ValueError("LLM2CLIP does not support scale TTA; keep eval.tta.scales=[1.0]")
         scaled_hw(height, width, float(scale), multiple)

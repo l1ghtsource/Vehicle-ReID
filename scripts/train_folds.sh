@@ -36,6 +36,7 @@ for fold in 0 1 2 3 4; do
       exit 1
     fi
     CUDA_VISIBLE_DEVICES="${GPUS[$fold]}" "$PYTHON" eval.py \
+      "$@" \
       "checkpoint=$checkpoint" \
       "data.fold=$fold" \
       "eval.split=val" \

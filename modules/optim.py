@@ -35,10 +35,10 @@ def build_optimizer(module, cfg):
     )
 
 
-def build_scheduler(optimizer, cfg, steps_per_epoch):
+def build_scheduler(optimizer, cfg, steps_per_epoch, total_steps=None):
     c = cfg.scheduler
     warm = round(c.warmup_epochs * steps_per_epoch)
-    total = max(1, cfg.train.epochs * steps_per_epoch)
+    total = max(1, int(total_steps if total_steps is not None else cfg.train.epochs * steps_per_epoch))
 
     def factor(step):
         if step < warm:

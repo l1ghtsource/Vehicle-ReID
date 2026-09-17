@@ -60,6 +60,8 @@ def test_search_space_all_losses(loss):
     overrides = search_space.suggest_overrides(trial, "dinov3_convnext_large")
     assert f"loss={loss}" in overrides
     assert "eval.weights=ema" in overrides
+    assert f"{loss}/loss.terms.0.weight" in trial.params
+    assert "loss.terms.0.weight" not in trial.params
 
 
 @pytest.mark.parametrize("optimizer", ["adamw", "sgd", "lamb", "lion"])
@@ -80,6 +82,9 @@ def test_search_space_models_optimizers_and_conditions(model, optimizer):
     assert "train.accumulate_grad_batches=1" in overrides
     if model == "llm2clip":
         assert "data.image_size=[336,336]" in overrides
+        assert "eval.tta.scales=[1.0]" in overrides
+    else:
+        assert "eval.tta.scales=[0.9,1.0,1.1]" in overrides
 
 
 def test_search_space_helpers():
@@ -109,6 +114,8 @@ def test_seed_params_from_config(cfg, tmp_path):
     OmegaConf.save(cfg, path)
     params = search_space.params_from_config(path, "convnext_tiny")
     assert params["loss"] == "combined"
+    assert params["combined/loss.terms.0.weight"] == pytest.approx(float(cfg.loss.terms[0].weight))
+    assert "loss.terms.0.weight" not in params
     assert params["optimizer"] == "adamw"
     assert "model.gradient_checkpointing" not in params
     assert "data.sampler.steps_per_epoch" not in params
@@ -152,6 +159,38 @@ def test_loss_name_variants():
         == "ce_triplet"
     )
     assert search_space._loss_name(OmegaConf.create({"loss": {"terms": [{"name": "arcface"}]}})) == "arcface"
+
+
+def test_optuna_study_allows_sphereface_then_proxyanchor():
+    study = optuna.create_study(sampler=optuna.samplers.RandomSampler(seed=0))
+
+    class ForcedLossTrial:
+        def __init__(self, trial, loss_name):
+            self._trial = trial
+            self._loss = loss_name
+
+        def suggest_categorical(self, name, choices):
+            if name == "loss":
+                self._trial.suggest_categorical(name, choices)
+                return self._loss
+            return self._trial.suggest_categorical(name, choices)
+
+        def suggest_float(self, name, low, high, log=False, step=None):
+            return self._trial.suggest_float(name, low, high, log=log, step=step)
+
+        def suggest_int(self, name, low, high, log=False, step=1):
+            return self._trial.suggest_int(name, low, high, log=log, step=step)
+
+    first = study.ask()
+    search_space.suggest_overrides(cast(optuna.Trial, ForcedLossTrial(first, "sphereface2")), "convnext_tiny")
+    study.tell(first, 0.1)
+    second = study.ask()
+    search_space.suggest_overrides(
+        cast(optuna.Trial, ForcedLossTrial(second, "proxyanchor")), "convnext_tiny"
+    )
+    study.tell(second, 0.2)
+    assert "sphereface2/loss.terms.0.params.alpha" in first.params
+    assert "proxyanchor/loss.terms.0.params.alpha" in second.params
 
 
 def create_fold_outputs(root, duplicate=False, mismatch=False):
