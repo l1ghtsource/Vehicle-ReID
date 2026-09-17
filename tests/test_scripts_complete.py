@@ -36,6 +36,18 @@ def test_zero_shot_weights_script_runs_all_local_backbones():
     assert "summary.json" in script
 
 
+def test_pretrain_script_selects_model_data_and_recipe():
+    script = (Path(__file__).resolve().parents[1] / "scripts/pretrain.sh").read_text()
+    assert "experiment defaults to current_best_tuned" in script
+    assert 'EXPERIMENT="${EXPERIMENT:-current_best_tuned}"' in script
+    assert '"pretrain.datasets=[$DATASETS]"' in script
+    assert '"model=$MODEL"' in script
+    assert "CUDA_VISIBLE_DEVICES" in script
+    assert "data.image_size=[336,336]" in script
+    assert "model.head.local_parts=0" in script
+    assert '"$@"' in script.split('"$PYTHON" pretrain.py', 1)[1]
+
+
 def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
     first = tmp_path / "fold0.json"
     second = tmp_path / "fold1.json"

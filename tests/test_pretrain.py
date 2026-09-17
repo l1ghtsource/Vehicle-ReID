@@ -80,6 +80,41 @@ def test_pretrain_config_composes():
     assert cfg.init_checkpoint is None
 
 
+def test_current_best_tuned_matches_trial_23():
+    with initialize_config_dir(
+        version_base="1.3", config_dir=str(Path(__file__).resolve().parents[1] / "configs")
+    ):
+        cfg = compose(config_name="pretrain", overrides=["experiment=current_best_tuned"])
+        swapped = compose(
+            config_name="pretrain",
+            overrides=[
+                "experiment=current_best_tuned",
+                "model=llm2clip",
+                "data.image_size=[336,336]",
+                "model.head.local_parts=0",
+                "pretrain.datasets=[vric]",
+            ],
+        )
+    assert cfg.train.epochs == 27
+    assert cfg.train.accumulate_grad_batches == 4
+    assert cfg.train.ema.enabled is True
+    assert cfg.model.pooling.kind == "attn"
+    assert cfg.model.head.local_parts == 2
+    assert cfg.model.head.embedding_dim == 256
+    assert list(cfg.data.image_size) == [384, 384]
+    assert cfg.data.sampler.identities == 16
+    assert cfg.data.sampler.instances == 2
+    assert cfg.scheduler.kind == "linear"
+    assert list(cfg.scheduler.milestones) == [27, 28]
+    assert cfg.eval.weights == "ema"
+    assert cfg.loss.terms[0].params.margin == pytest.approx(0.4789452160852028)
+    assert cfg.optimizer.lr == pytest.approx(0.0006983608478082421)
+    assert swapped.model.name == "microsoft/LLM2CLIP-EVA02-L-14-336"
+    assert list(swapped.data.image_size) == [336, 336]
+    assert swapped.model.head.local_parts == 0
+    assert list(swapped.pretrain.datasets) == ["vric"]
+
+
 def test_read_veri_and_vric_formats(tmp_path):
     veri = read_veri(write_veri(tmp_path / "declared"))
     assert veri.source.unique().tolist() == ["veri"]

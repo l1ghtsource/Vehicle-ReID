@@ -283,7 +283,12 @@ Experiment presets provide larger ready-to-run configurations:
 .venv/bin/python train.py experiment=dino_base data.fold=0
 .venv/bin/python train.py experiment=radio data.fold=0
 .venv/bin/python train.py experiment=llm2clip data.fold=0
+.venv/bin/python train.py experiment=current_best_tuned data.fold=0
 ```
+
+`current_best_tuned` is Optuna study `convnext_base_all` trial 23 (OOF mAP 0.7587): 384 input,
+PK 16×2, ArcFace+AdaSP, linear schedule, EMA. It defaults to DINOv3 ConvNeXt Base; pass `model=` to
+use the same recipe with another backbone.
 
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
@@ -314,12 +319,28 @@ This prevents accidental continuation on different data or a different identity-
 competition `train.csv` query/gallery split. Use this to produce a backbone/head checkpoint that
 can initialize ordinary competition training.
 
-Train on VeRi, VRIC, or both:
+Train on VeRi, VRIC, or both. `scripts/pretrain.sh` selects the GPU, Hydra model group, extra
+datasets, and experiment recipe. It defaults to `experiment=current_best_tuned` and local
+`weights/` checkpoints:
 
 ```bash
-.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[veri]
-.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[vric]
-.venv/bin/python pretrain.py model=dinov3_convnext_base pretrain.datasets=[veri,vric]
+scripts/pretrain.sh cuda:2 dinov3_convnext_base veri
+scripts/pretrain.sh cuda:2 llm2clip vric
+scripts/pretrain.sh 2 dinov3_convnext_base veri,vric
+scripts/pretrain.sh cuda:2 radio both smoke
+```
+
+The first argument is `cuda:N` or `N`. The second is the Hydra model group. The third is `veri`,
+`vric`, `veri,vric`, or `both`. An optional fourth token without `=` is the experiment name;
+otherwise extra tokens are Hydra overrides. LLM2CLIP is forced to 336 × 336 and `local_parts=0`.
+Set `EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaults.
+
+Direct Hydra remains available:
+
+```bash
+.venv/bin/python pretrain.py experiment=current_best_tuned model=dinov3_convnext_base pretrain.datasets=[veri]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric] \
+  data.image_size=[336,336] model.head.local_parts=0
 ```
 
 The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
@@ -332,8 +353,8 @@ and data fingerprint, so `train.py` would reject that checkpoint.
 
 ```bash
 .venv/bin/python train.py \
-  model=dinov3_convnext_base \
-  init_checkpoint=runs/pretrain/external_pretrain/<run>/checkpoints/<ckpt>.ckpt \
+  experiment=current_best_tuned \
+  init_checkpoint=runs/pretrain/dinov3_convnext_base_veri/<run>/checkpoints/<ckpt>.ckpt \
   data.fold=0
 ```
 
