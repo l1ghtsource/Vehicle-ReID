@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import pytest
 import torch
+from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
 from torch import nn
 
@@ -205,6 +206,8 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     cfg.data.fold = 0
     cfg.data.folds_file = "/cli/folds.csv"
     cfg.eval.weights = "raw"
+    cfg.refusal.kind = "threshold"
+    cfg.refusal.cosine_threshold = 0.64
     _, effective, _, _ = eval_module.load_model(cfg, [])
     assert bool(effective.eval.tta.enabled) is True
     assert [float(scale) for scale in effective.eval.tta.scales] == [1.0, 1.1]
@@ -215,6 +218,8 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert str(effective.data.root) == "/ckpt/root"
     assert str(effective.data.query_csv) == "/ckpt/root/test_query.csv"
     assert str(effective.data.gallery_csv) == "/elsewhere/gallery.csv"
+    assert str(effective.refusal.kind) == "threshold"
+    assert float(effective.refusal.cosine_threshold) == 0.64
 
     cfg.eval.tta.enabled = True
     cfg.postproc.enabled = True
@@ -222,6 +227,9 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     cfg.data.fold = 1
     cfg.data.root = "/custom/root"
     cfg.data.query_csv = "/explicit/query.csv"
+    cfg.refusal.kind = "ensemble"
+    cfg.refusal.rank_threshold = 0.4
+    cfg.refusal.model_path = "/tmp/refuse.cbm"
     _, effective, _, _ = eval_module.load_model(
         cfg,
         [
@@ -231,6 +239,9 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
             "data.fold=1",
             "data.root=/custom/root",
             "data.query_csv=/explicit/query.csv",
+            "refusal.kind=ensemble",
+            "refusal.rank_threshold=0.4",
+            "refusal.model_path=/tmp/refuse.cbm",
             "experiment=smoke",
             "~trainer.devices",
             "+data.foo=1",
@@ -247,6 +258,30 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert str(effective.data.query_csv) == "/explicit/query.csv"
     assert str(effective.data.gallery_csv) == "/elsewhere/gallery.csv"
     assert str(effective.data.image_dir) == "/custom/root/images"
+    assert str(effective.refusal.kind) == "ensemble"
+    assert float(effective.refusal.rank_threshold) == 0.4
+    assert str(effective.refusal.model_path) == "/tmp/refuse.cbm"
+
+
+def test_refusal_serving_presets():
+    config_dir = str(Path(__file__).resolve().parents[1] / "configs")
+    with initialize_config_dir(version_base="1.3", config_dir=config_dir):
+        none = compose(config_name="config", overrides=["experiment=smoke"])
+        threshold = compose(config_name="config", overrides=["experiment=smoke", "refusal=eva02_threshold"])
+        model = compose(config_name="config", overrides=["experiment=smoke", "refusal=eva02_model"])
+        ensemble = compose(config_name="config", overrides=["experiment=smoke", "refusal=eva02_ensemble"])
+    assert none.refusal.kind == "none"
+    assert none.refusal.cosine_threshold is None
+    assert threshold.refusal.kind == "threshold"
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6372)
+    assert model.refusal.kind == "model"
+    assert float(model.refusal.model_threshold) == pytest.approx(0.4149)
+    assert str(model.refusal.model_path) == "artifacts/refusal/eva02_catboost.cbm"
+    assert ensemble.refusal.kind == "ensemble"
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6372)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.4149)
+    assert ensemble.refusal.rank_threshold is None
+    assert "refusal" not in none.eval
 
 
 class EvalModel(nn.Module):
@@ -282,20 +317,59 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     data_cfg.eval.tta.enabled = True
     data_cfg.eval.tta.context_pcts = [0, 10]
     data_cfg.eval.split = "val"
+    data_cfg.refusal.kind = None
+    data_cfg.refusal.k = None
+    data_cfg.refusal.with_embeddings = None
     eval_module.main.__wrapped__(data_cfg)
     metadata = json.loads((tmp_path / "val/metrics.json").read_text())
     assert metadata["n_query"] == 2
     assert "metrics" in metadata
+    assert metadata["refusal"]["kind"] == "none"
+    assert metadata["refusal"]["n_accept"] == metadata["n_query"]
+    assert metadata["refusal"]["n_refuse"] == 0
     oof = pd.read_csv(tmp_path / "val/oof.csv")
     assert len(oof) == len(folds[folds.fold == data_cfg.data.fold])
     assert np.load(tmp_path / "val/embeddings.npy").shape[0] == len(oof)
+
+    data_cfg.refusal.kind = "threshold"
+    data_cfg.refusal.cosine_threshold = 2.0
+    data_cfg.eval.output_dir = str(tmp_path / "val_refuse")
+    eval_module.main.__wrapped__(data_cfg)
+    refused = pd.read_csv(tmp_path / "val_refuse/candidates.csv")
+    kept = pd.read_csv(tmp_path / "val_refuse/submission.csv")
+    refuse_meta = json.loads((tmp_path / "val_refuse/metrics.json").read_text())
+    assert refused.empty
+    assert len(kept) == refuse_meta["n_query"]
+    assert refuse_meta["refusal"]["kind"] == "threshold"
+    assert refuse_meta["refusal"]["n_refuse"] == refuse_meta["n_query"]
+    data_cfg.refusal.kind = "model"
+    data_cfg.refusal.model_threshold = 0.5
+    with pytest.raises(ValueError, match="model_path"):
+        eval_module.main.__wrapped__(data_cfg)
+    data_cfg.refusal.kind = "off"
+    data_cfg.refusal.cosine_threshold = None
+    data_cfg.eval.output_dir = str(tmp_path / "val_off")
+    eval_module.main.__wrapped__(data_cfg)
+    off_meta = json.loads((tmp_path / "val_off/metrics.json").read_text())
+    assert off_meta["refusal"]["kind"] == "none"
+    assert off_meta["refusal"]["n_refuse"] == 0
+    data_cfg.refusal.kind = "none"
 
     data_cfg.eval.split = "test"
     data_cfg.eval.output_dir = str(tmp_path / "test")
     data_cfg.eval.save_distances = False
     eval_module.main.__wrapped__(data_cfg)
     assert (tmp_path / "test/submission.csv").is_file()
+    cand = pd.read_csv(tmp_path / "test/candidates.csv")
+    assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
+    assert not cand.empty
     assert not (tmp_path / "test/distances.npy").exists()
+    query_src = pd.read_csv(data_cfg.data.query_csv, dtype={"image_id": str})
+    gallery_src = pd.read_csv(data_cfg.data.gallery_csv, dtype={"image_id": str})
+    order = pd.read_csv(tmp_path / "test/embedding_order.csv", dtype={"image_id": str})
+    emb = np.load(tmp_path / "test/embeddings.npy")
+    assert order.image_id.tolist() == query_src.image_id.tolist() + gallery_src.image_id.tolist()
+    assert emb.shape == (len(order), 8) and emb.dtype == np.float32
 
     gallery = pd.read_csv(data_cfg.data.query_csv)
     gallery.to_csv(data_cfg.data.gallery_csv, index=False)
@@ -424,6 +498,8 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
     assert str(written.data.train_csv) == str(Path(data_cfg.data.root) / "train.csv")
     assert not str(written.data.query_csv).startswith(old_root)
     assert (out / "submission.csv").is_file()
+    cand = pd.read_csv(out / "candidates.csv")
+    assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
 
 
 def test_entrypoint_main_guards(monkeypatch):

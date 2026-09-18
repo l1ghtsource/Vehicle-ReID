@@ -1,0 +1,8 @@
+# EVA02 nested 5-fold inner-CV mean max-cosine operating point.
+kind: threshold
+cosine_threshold: 0.6372
+model_path: null
+model_threshold: null
+rank_threshold: null
+k: 10
+with_embeddings: true

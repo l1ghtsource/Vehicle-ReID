@@ -1,0 +1,8 @@
+# Default: write every query to candidates.csv.
+kind: none
+cosine_threshold: null
+model_path: null
+model_threshold: null
+rank_threshold: null
+k: 10
+with_embeddings: true

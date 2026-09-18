@@ -105,14 +105,29 @@ def gnn_rerank(query, gallery, k1=20, k2=6, lambda_value=0.3, device="cpu", max_
     return (1 - similarity).cpu().numpy()
 
 
+def _streaming(cfg):
+    if "streaming" not in cfg:
+        return True
+    flag = cfg.streaming
+    return True if flag is None else bool(flag)
+
+
+def _per_query(fn, query, gallery, **kwargs):
+    rows = [fn(query[i : i + 1], gallery, **kwargs) for i in range(len(query))]
+    return np.concatenate(rows, axis=0)
+
+
 def postprocess(query, gallery, cfg):
     q, g = normalize(query), normalize(gallery)
     if not cfg.enabled:
         return 1 - q @ g.T, q, g
+    streaming = _streaming(cfg)
     if cfg.gallery_aggregation.enabled:
         p = {k: v for k, v in cfg.gallery_aggregation.items() if k != "enabled"}
         g = aggregate_gallery(g, **p)
     if cfg.aqe.enabled:
+        if streaming:
+            raise ValueError("AQE is not streaming-safe; it uses the query batch")
         p = {k: v for k, v in cfg.aqe.items() if k != "enabled"}
         q, g = aqe(q, g, **p)
     r = cfg.rerank
@@ -120,9 +135,10 @@ def postprocess(query, gallery, cfg):
     if r.kind == "none":
         distance = 1 - q @ g.T
     elif r.kind == "k_reciprocal":
-        distance = k_reciprocal(q, g, **common)
+        distance = _per_query(k_reciprocal, q, g, **common) if streaming else k_reciprocal(q, g, **common)
     elif r.kind == "gnn":
-        distance = gnn_rerank(q, g, device=r.device, **common)
+        gnn_kw = dict(device=r.device, **common)
+        distance = _per_query(gnn_rerank, q, g, **gnn_kw) if streaming else gnn_rerank(q, g, **gnn_kw)
     else:
         raise ValueError(f"Unknown reranker {r.kind}")
     return distance, q, g

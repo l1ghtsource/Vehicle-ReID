@@ -4,6 +4,7 @@ defaults:
   - optimizer: adamw
   - scheduler: cosine
   - augmentation: reid
+  - refusal: none
   - _self_
   - experiment: null
 seed: 42
@@ -103,6 +104,8 @@ eval:
     context_pcts: null
 postproc:
   enabled: false
+  # One query vs the static gallery. AQE and query-query graphs are rejected when true.
+  streaming: true
   max_dense_gb: 4.0
   aqe:
     enabled: false

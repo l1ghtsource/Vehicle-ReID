@@ -19,6 +19,7 @@ def config():
     return OmegaConf.create(
         {
             "enabled": True,
+            "streaming": True,
             "max_dense_gb": 1,
             "gallery_aggregation": {
                 "enabled": False,
@@ -85,15 +86,27 @@ def test_postprocess_all_orchestration(monkeypatch):
     cfg.enabled = True
     cfg.gallery_aggregation.enabled = True
     cfg.aqe.enabled = True
+    with pytest.raises(ValueError, match="streaming-safe"):
+        postprocess(query, gallery, cfg)
+    cfg.streaming = False
     for kind in ("none", "k_reciprocal", "gnn"):
         cfg.rerank.kind = kind
         if kind == "k_reciprocal":
             monkeypatch.setattr(
                 retrieval,
                 "re_ranking",
-                lambda *args, **kwargs: np.zeros((len(query), len(gallery))),
+                lambda qg, qq, gg, **kwargs: np.zeros(np.asarray(qg).shape, dtype=np.float32),
             )
         assert postprocess(query, gallery, cfg)[0].shape == (2, 3)
+    cfg.aqe.enabled = False
+    cfg.streaming = True
+    cfg.rerank.kind = "k_reciprocal"
+    assert postprocess(query, gallery, cfg)[0].shape == (2, 3)
+    cfg.rerank.kind = "gnn"
+    assert postprocess(query, gallery, cfg)[0].shape == (2, 3)
+    assert retrieval._streaming(OmegaConf.create({})) is True
+    cfg.streaming = None
+    assert retrieval._streaming(cfg) is True
     cfg.rerank.kind = "bad"
     with pytest.raises(ValueError, match="Unknown reranker"):
         postprocess(query, gallery, cfg)

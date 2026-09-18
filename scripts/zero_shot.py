@@ -108,7 +108,7 @@ def main() -> None:
         "n_query": len(query),
         "n_gallery": len(gallery),
         "n_train": len(frame),
-        "transductive": bool(cfg.postproc.enabled),
+        "streaming": True if cfg.postproc.streaming is None else bool(cfg.postproc.streaming),
         "raw_metrics": retrieval_metrics(1 - qe @ ge.T, **metric_args),
         "metrics": retrieval_metrics(distance, **metric_args),
     }

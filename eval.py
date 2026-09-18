@@ -20,6 +20,7 @@ from models import ReIDModel
 from modules.inference import embed_loader
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
+from refusal import refusal_accept, write_candidates
 
 DATA_ROOT_PATHS = ("train_csv", "query_csv", "gallery_csv", "image_dir")
 
@@ -77,6 +78,8 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
                 "save_distances": cfg.eval.save_distances,
                 "precision": cfg.eval.precision,
             },
+            "refusal": cfg.refusal,
+            "postproc": {"streaming": cfg.postproc.streaming},
         },
     )
     missing = object()
@@ -192,20 +195,44 @@ def main(cfg):
         oof.to_csv(out / "oof.csv", index=False)
     k = min(int(cfg.eval.top_k), len(g))
     order = np.argsort(distance, axis=1, kind="stable")[:, :k]
+    ranked = g.image_id.to_numpy()[order]
+    confidence = np.take_along_axis(1.0 - distance, order, axis=1)
     sub = pd.DataFrame(
-        g.image_id.to_numpy()[order],
+        ranked,
         columns=pd.Index([f"gallery_id_{j + 1}" for j in range(k)]),
     )
     sub.insert(0, "query_id", q.image_id.to_numpy())
     sub.to_csv(out / "submission.csv", index=False)
+    spec = cfg.refusal
+    feature_k = int(cfg.eval.top_k) if spec.k is None else int(spec.k)
+    embeds = True if spec.with_embeddings is None else bool(spec.with_embeddings)
+    kind = "none" if spec.kind is None else str(spec.kind).strip().lower()
+    if kind == "off":
+        kind = "none"
+    accept = refusal_accept(
+        spec.kind,
+        expanded_q,
+        expanded_g,
+        cosine_threshold=spec.cosine_threshold,
+        model_path=spec.model_path,
+        model_threshold=spec.model_threshold,
+        rank_threshold=spec.rank_threshold,
+        k=feature_k,
+        with_embeddings=embeds,
+    )
+    write_candidates(out / "candidates.csv", q.image_id.to_numpy(), ranked, confidence, accept=accept)
     metadata = {
         "weights": choice,
         "checkpoint": str(cfg.checkpoint),
         "fold": int(cfg.data.fold),
         "n_query": len(q),
         "n_gallery": len(g),
-        "transductive": bool(cfg.postproc.enabled),
-        "refusal": "not implemented (deferred by request)",
+        "streaming": True if cfg.postproc.streaming is None else bool(cfg.postproc.streaming),
+        "refusal": {
+            "kind": kind,
+            "n_accept": int(np.asarray(accept).sum()),
+            "n_refuse": int(len(accept) - np.asarray(accept).sum()),
+        },
     }
     if cfg.eval.split == "val":
         args = dict(

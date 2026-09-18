@@ -337,7 +337,10 @@ eval:
     - 0.0
     - 4.972099731465896
 postproc:
+  # Contest serving is streaming: gallery may be prebuilt, each query is independent.
+  # AQE and query-query rerank stay off; they were measured on OOF only.
   enabled: false
+  streaming: true
   aqe:
     enabled: false
     k: 17

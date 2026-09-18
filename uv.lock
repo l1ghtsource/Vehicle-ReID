@@ -165,6 +165,33 @@ wheels = [
 ]
 
 [[package]]
+name = "catboost"
+version = "1.2.10"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+dependencies = [
+    { name = "graphviz" },
+    { name = "matplotlib" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "pandas" },
+    { name = "plotly" },
+    { name = "scipy", version = "1.17.1", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "scipy", version = "1.18.1", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "six" },
+]
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10.tar.gz", hash = "sha256:26ae6d423acaf0e9d8160f2477a990431057ed04522d993c2f42dac62743b4f7" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp311-cp311-macosx_11_0_universal2.whl", hash = "sha256:ab2e84237308d62bae236b1ecba2e3867697f96bdbaf0ca68dafc2c886946406" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp311-cp311-manylinux2014_aarch64.whl", hash = "sha256:5ffe85f53092219cf65c73c2946426a289ef6f62c119c2bfda52815250d9bcef" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp311-cp311-manylinux2014_x86_64.whl", hash = "sha256:5819a880af6b314f4980e6c26ad0f7552eafcf247d521bc884fe726347fdd87d" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp311-cp311-win_amd64.whl", hash = "sha256:41bbe16cab0695978c325a20fa300f92831ed78e9cc8c5fe8047538b4055e98e" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp312-cp312-macosx_11_0_universal2.whl", hash = "sha256:b27115d5b443048f710001c8ac666892dfe03498492310b00466203c91cc30a5" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp312-cp312-manylinux2014_aarch64.whl", hash = "sha256:39234b3692b6c9002b4a2ac529025fc210dd72feb9b621b27d17c65b7d3e9f92" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp312-cp312-manylinux2014_x86_64.whl", hash = "sha256:b28f763776e62f50da90dddf73b36399583295032667a7e46fc5c1f2593eb80f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/catboost/1.2.10/catboost-1.2.10-cp312-cp312-win_amd64.whl", hash = "sha256:6b8a7ef11d7a89fc547760cfafeee895011a4b92cc1f60d00235ef80a71158ed" },
+]
+
+[[package]]
 name = "certifi"
 version = "2026.7.22"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
@@ -261,6 +288,72 @@ wheels = [
 ]
 
 [[package]]
+name = "contourpy"
+version = "1.3.3"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+resolution-markers = [
+    "python_full_version < '3.12'",
+]
+dependencies = [
+    { name = "numpy", version = "2.4.6", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
+]
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3.tar.gz", hash = "sha256:083e12155b210502d0bca491432bb04d56dc3432f95a979b429f2848c3dbe880" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:709a48ef9a690e1343202916450bc48b9e51c049b089c7f79a267b46cffcdaa1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:23416f38bfd74d5d28ab8429cc4d63fa67d5068bd711a85edb1c3fb0c3e2f381" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:929ddf8c4c7f348e4c0a5a3a714b5c8542ffaa8c22954862a46ca1813b667ee7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:9e999574eddae35f1312c2b4b717b7885d4edd6cb46700e04f7f02db454e67c1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:0bf67e0e3f482cb69779dd3061b534eb35ac9b17f163d851e2a547d56dba0a3a" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:51e79c1f7470158e838808d4a996fa9bac72c498e93d8ebe5119bc1e6becb0db" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:598c3aaece21c503615fd59c92a3598b428b2f01bfb4b8ca9c4edeecc2438620" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:322ab1c99b008dad206d406bb61d014cf0174df491ae9d9d0fac6a6fda4f977f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-win32.whl", hash = "sha256:fd907ae12cd483cd83e414b12941c632a969171bf90fc937d0c9f268a31cafff" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-win_amd64.whl", hash = "sha256:3519428f6be58431c56581f1694ba8e50626f2dd550af225f82fb5f5814d2a42" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp311-cp311-win_arm64.whl", hash = "sha256:15ff10bfada4bf92ec8b31c62bf7c1834c244019b4a33095a68000d7075df470" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:b08a32ea2f8e42cf1d4be3169a98dd4be32bafe4f22b6c4cb4ba810fa9e5d2cb" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:556dba8fb6f5d8742f2923fe9457dbdd51e1049c4a43fd3986a0b14a1d815fc6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:92d9abc807cf7d0e047b95ca5d957cf4792fcd04e920ca70d48add15c1a90ea7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:b2e8faa0ed68cb29af51edd8e24798bb661eac3bd9f65420c1887b6ca89987c8" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:626d60935cf668e70a5ce6ff184fd713e9683fb458898e4249b63be9e28286ea" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:4d00e655fcef08aba35ec9610536bfe90267d7ab5ba944f7032549c55a146da1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:451e71b5a7d597379ef572de31eeb909a87246974d960049a9848c3bc6c41bf7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:459c1f020cd59fcfe6650180678a9993932d80d44ccde1fa1868977438f0b411" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-win32.whl", hash = "sha256:023b44101dfe49d7d53932be418477dba359649246075c996866106da069af69" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-win_amd64.whl", hash = "sha256:8153b8bfc11e1e4d75bcb0bff1db232f9e10b274e0929de9d608027e0d34ff8b" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-cp312-cp312-win_arm64.whl", hash = "sha256:07ce5ed73ecdc4a03ffe3e1b3e3c1166db35ae7584be76f65dbbe28a7791b0cc" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:cd5dfcaeb10f7b7f9dc8941717c6c2ade08f587be2226222c12b25f0483ed497" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:0c1fc238306b35f246d61a1d416a627348b5cf0648648a031e14bb8705fcdfe8" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-pp311-pypy311_pp73-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:70f9aad7de812d6541d29d2bbf8feb22ff7e1c299523db288004e3157ff4674e" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:5ed3657edf08512fc3fe81b510e35c2012fbd3081d2e26160f27ca28affec989" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.3.3/contourpy-1.3.3-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:3d1a3799d62d45c18bafd41c5fa05120b96a28079f2393af559b843d1a966a77" },
+]
+
+[[package]]
+name = "contourpy"
+version = "1.4.0"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+resolution-markers = [
+    "python_full_version >= '3.12'",
+]
+dependencies = [
+    { name = "numpy", version = "2.5.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
+]
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0.tar.gz", hash = "sha256:20156f5a1ac4f8ce02656e39a61e82164a3d359796dc8026f75b062783d500e1" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:186ba929df36d61b6127da2e89cd1357e4cb79aca647381ab1a6feb0b152877b" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:c76f3a5318164db7d9401132fc1b5364b784c613c93fa506e3b5e6d1bf353ec8" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:43c3ccbb32c6294b183dcc8e8c46dacf5ecef809497e3d48a5be298eef185ad0" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-manylinux_2_26_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:86d05cec773c9507a3950122e0e40ce77c23c75ceeb2fc189514e71893cbb34b" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-manylinux_2_26_s390x.manylinux_2_28_s390x.whl", hash = "sha256:2deb580178ca19437a84bd77e4bc2cd91a8ccad212413a83c273900868b5978c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:875f42444c9cf48d56f724f2637e60d0f73b3b12c9041e1484580a233edf9591" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:f863c6100bf926cf47d13f3cd75f9bb8ebd98aaab230eeb4468b91f98f39a6b3" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3863ef2e2b13fe93f8c0ebb08ee400cb07153b8b0e91c5acb26e4537f283634f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-win32.whl", hash = "sha256:5450f091ac1be0be3ad3a2a3b3f23b5e443e78c670ced4fd347d626f92a28fd2" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-win_amd64.whl", hash = "sha256:6e697d94e69f499ff6bebb899cae97a58d5d14f0e1fe9568b43a0248d2f9af8c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/contourpy/1.4.0/contourpy-1.4.0-cp312-cp312-win_arm64.whl", hash = "sha256:0c7a4c2716a4e98342221954416a836cca77c996c14ddbf22b5f01d5d93ca09c" },
+]
+
+[[package]]
 name = "coverage"
 version = "7.16.1"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
@@ -305,6 +398,15 @@ toml = [
 ]
 
 [[package]]
+name = "cycler"
+version = "0.12.1"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/cycler/0.12.1/cycler-0.12.1.tar.gz", hash = "sha256:88bb128f02ba341da8ef447245a9e138fae777f6a23943da4540077d3601eb1c" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/cycler/0.12.1/cycler-0.12.1-py3-none-any.whl", hash = "sha256:85cef7cff222d8644161529808465972e51340599459b8ac3ccbac5a854e0d30" },
+]
+
+[[package]]
 name = "einops"
 version = "0.8.2"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
@@ -320,6 +422,31 @@ source = { registry = "https://package-cache-pypi.query.consul-tech/repository/p
 sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/filelock/3.32.6/filelock-3.32.6.tar.gz", hash = "sha256:a3f55a18af3652a94d8f47d6055df434f254ca1d02ef2524850c6d249ca2512c" }
 wheels = [
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/filelock/3.32.6/filelock-3.32.6-py3-none-any.whl", hash = "sha256:3f16ecd0117feae0dfc147e8c62eb5daeccd8bd800378c3ddf416de9b4feb6b1" },
+]
+
+[[package]]
+name = "fonttools"
+version = "4.65.0"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0.tar.gz", hash = "sha256:762ba5431358d0dbd4a01982484a1d494fb267e91f974cdcf20b80eab8560f6f" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:06273c71e692caf5989c0437ca50875a5e49e216ddf653228fe9bb35bdc82c0f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:ca2b02d74e9ad7e21a1d11e4701425800a4b0c63cf90486e60258262feccbcbf" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:7830e9fa3bebc44dbc27ff44d8201def30ea5c48a773696d58e69e6bcd9cd5d4" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:a3991732c87b3f054a2a8cf86dd0d602833fa8cb37c911503173771646e1013d" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:6031e77b3fb8c765055ba2b8bd8dcb17030f3bf2484c448b472fdedf4460ba80" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:6813cc1e2e883bd6c15b3e04f72c78dc65fdc4ca861063adf5f341fbaec2ca62" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-win32.whl", hash = "sha256:4a5db8442453da4b6f43ad325879381b726bf2238a2253efd9584be21a2cefc2" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp311-cp311-win_amd64.whl", hash = "sha256:9f201796c8e24e657be77c16fa664e798a46122144217f90838982937a964f0a" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:e844a45c9e5ced6536f184cf1a65b5d65e8f7e711993b413e10500a8223622e5" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:b30e953de049bf43fc0a63c7d0c44d205c923e4bbf24716aae1518c0e65f977c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-manylinux2014_aarch64.manylinux_2_17_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:09c34bdeed8915bfb53bee0c8ed2254dbd8ec69c0014b7f3702f347c049bf358" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:05595385ae99f4b9626cebb973bf171b8fe38a8f40708e6e42abba0ed7537778" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:d95b34dd68fbfc0e4a1740c421597656117f979ed8dc85de66e08f9f9981806e" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:924d06e6130429168318db71c40174a765ad016fc4b56ca811287e3d7373b3a6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-win32.whl", hash = "sha256:04f73dd01005752a6e75cf4a8dc6b70dc724d1d4bc34cc89522153f4a2f07680" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-cp312-cp312-win_amd64.whl", hash = "sha256:3b5d9ba89edf778b376e669b879ae33a198bf45cf5a23c3f6514f935cf9d0d9d" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/fonttools/4.65.0/fonttools-4.65.0-py3-none-any.whl", hash = "sha256:3060b8c1fc2329fa20265b7c138614143ea7c1624e26c5c180c76aeb74deae6f" },
 ]
 
 [[package]]
@@ -387,6 +514,15 @@ dependencies = [
 sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/ftfy/6.3.1/ftfy-6.3.1.tar.gz", hash = "sha256:9b3c3d90f84fb267fe64d375a07b7f8912d817cf86009ae134aa03e1819506ec" }
 wheels = [
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/ftfy/6.3.1/ftfy-6.3.1-py3-none-any.whl", hash = "sha256:7c70eb532015cd2f9adb53f101fb6c7945988d023a085d127d1573dc49dd0083" },
+]
+
+[[package]]
+name = "graphviz"
+version = "0.21"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/graphviz/0.21/graphviz-0.21.tar.gz", hash = "sha256:20743e7183be82aaaa8ad6c93f8893c923bd6658a04c32ee115edb3c8a835f78" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/graphviz/0.21/graphviz-0.21-py3-none-any.whl", hash = "sha256:54f33de9f4f911d7e84e4191749cac8cc5653f815b06738c54db9a15ab8b1e42" },
 ]
 
 [[package]]
@@ -509,6 +645,52 @@ wheels = [
 ]
 
 [[package]]
+name = "kiwisolver"
+version = "1.5.1"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1.tar.gz", hash = "sha256:f1303ef2eec81262a4b708c3e858afe58d7c75ad91c1c05266eda7673369859a" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-macosx_10_9_universal2.whl", hash = "sha256:b3d78f7bb2b9d9a30345be1474b9aaa8685430b54afb51ba3639b5c6c11e9ed6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-macosx_10_9_x86_64.whl", hash = "sha256:5025e36fb4fb275cef0a4e30dbb11cb4ae61d1c83deb90189cb5d7e4cafd6b55" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:dc1a26b8e53395a01c2c611e58602fa47461f136fba7cd5542e6db6d64be1839" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:95a02752aa032eef4aed01cda6d9b687c669bd0396bf4519eef8bba22a286720" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:719a35fa1156db3640555f95ebb94f60a444e64d1c69626b0edef5df78eba225" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:febcce10f2bcdbb80b4ea919238a6a4ac13dbc4c7cadbe8d5d75c3682f8b5404" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:1d852545c4d0e35a72728d072cbaa59e2fa7dd84bdf01e068d670dd0ceb58eb6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-manylinux_2_39_riscv64.whl", hash = "sha256:2e10ae1bba1899188b33557c10d73affcc12033edd18adddb57d209039976a4c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-musllinux_1_2_aarch64.whl", hash = "sha256:b69602970994a2ed8bbfa78c2f0394a7435226c6040489702d9f0a0ad0c07052" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-musllinux_1_2_ppc64le.whl", hash = "sha256:d50de98e8d807dc31822fff96f50293163a62418eb65487a21b42713d72ed0b7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-musllinux_1_2_riscv64.whl", hash = "sha256:3221f78211074f561c44ca42eac0619828171bec15a2c4cf6f7747d07df76e8e" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-musllinux_1_2_s390x.whl", hash = "sha256:0ba9527afc80ae3d7814ed98b6572d02bf85eaf48065678342c5f0c6dab7a8c7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:e12dfea7f5fc2a34a9080efbf79c4c44eb380ec5b9c6fea09407e08f0d1e941d" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-win_amd64.whl", hash = "sha256:1a7587dc335f2c0f5bd577fd0540bd16c66006bdb60f759a1059f025e6c4f071" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp311-cp311-win_arm64.whl", hash = "sha256:e4e4523d6f336708d732516e6cfca7796cf3d96c9474eb5aecf6165f2f1fefc3" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-macosx_10_13_universal2.whl", hash = "sha256:63fb7294b768f444eb4b068965f2662f28c2fd4161e23bd60fcf3ff27b74c046" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:0ebdef3eae5336568147c39a55be6a2036ffde53faa9ca2d978989ae7c2da12c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:1798e83840c3f627246104c4d8a9639c60fa068adf9ce92b61791781fa8a68c1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:34633ecf50d16187ab8e5528b7a2530f2feb4e23f300db4672538b51cfc5cd38" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:d27c2123977cb9269c30a49ba45f03a4323017ef693e19db4ec9dbe1299a3002" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_ppc64le.manylinux_2_28_ppc64le.whl", hash = "sha256:6a797a1cefc8b9c93170db580337e1fe3d011ad18b1299943231279406342048" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-manylinux_2_24_s390x.manylinux_2_28_s390x.whl", hash = "sha256:2551cf9917af48ee7c4b29cc82320489508cf96fd26a51f6fc124de661cd44c7" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-manylinux_2_39_riscv64.whl", hash = "sha256:38f6e0deb4d0a4615efe0c4efc5990b06ae450ab50a0b321c0b078b6d238c083" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-musllinux_1_2_aarch64.whl", hash = "sha256:bfd1de989b3330420e29de39352f5c049905c9e3ee67233a50d550e3d652c148" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-musllinux_1_2_ppc64le.whl", hash = "sha256:1209042a623ddfda5497e4066c7b77651dde8e1d3a9dd97599dc7e97f3b9b78c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-musllinux_1_2_riscv64.whl", hash = "sha256:26e8268480be5061d509e29669d59103c067a26377a56491630ece11762e3858" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-musllinux_1_2_s390x.whl", hash = "sha256:d79308fa689fac89cbcfbd4dbfc80b5f95c54c5a7fd4d194be221f9d33d026e6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:b03af77d77e50edba2030fd5f7c352ff209314b09030a3cba7c14edf9a09a444" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-win_amd64.whl", hash = "sha256:06a6917674de9e0fe3f66f5430787f59a9f2ddb64af9b714eaec547e29ef5c19" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-cp312-cp312-win_arm64.whl", hash = "sha256:ad8b9671348d7c8716715652ae11f85ed0eb99e265a2df2ca490577d69860b2c" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-graalpy312-graalpy250_312_native-macosx_11_0_arm64.whl", hash = "sha256:482676e5bd48d70ac99d9fc78863469845421e01184fa83f1f9366dc49f7e974" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-graalpy312-graalpy250_312_native-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:072bdb15a3c19a5b5dbc8f8fb1f4e1884bf4f3507eeb4cc6334401274d37a5c0" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-graalpy312-graalpy250_312_native-win_amd64.whl", hash = "sha256:a5a00665d1a0e26763a7338d7e911d4598fbc1d50dd0d6b7919b7dc6c5d6569f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:416ba7ff9f233b7036689bb5a3783537e838ad483f63558d2a800f75afe738b1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:8af9b142ad719ae3a911ebf616bc4b78b32bbab84d6a40d3ad2f129670509957" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5daa1f19e097050b9c4d9a78fcc9263cb96c9dfae08037ddc1b7c4ad1889f2a2" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-pp311-pypy311_pp73-manylinux_2_24_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:cdaeeb6c350106df6bf9d873395973e5f066a9713200b72cd64f55d0a3eafab6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/kiwisolver/1.5.1/kiwisolver-1.5.1-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:17851e5dad4484be0cbccbde3b15331deae036de9aebd45eed964487802b172f" },
+]
+
+[[package]]
 name = "lightning"
 version = "2.5.5"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
@@ -584,6 +766,44 @@ wheels = [
 ]
 
 [[package]]
+name = "matplotlib"
+version = "3.11.2"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+dependencies = [
+    { name = "contourpy", version = "1.3.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "contourpy", version = "1.4.0", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "cycler" },
+    { name = "fonttools" },
+    { name = "kiwisolver" },
+    { name = "numpy", version = "2.4.6", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
+    { name = "numpy", version = "2.5.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
+    { name = "packaging" },
+    { name = "pillow" },
+    { name = "pyparsing" },
+    { name = "python-dateutil" },
+]
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2.tar.gz", hash = "sha256:cec596316640f2b394b8f0daa0ea61a8eae82d017b620b9f202befb972a59ea4" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-macosx_10_12_x86_64.whl", hash = "sha256:5e1e923a3fc3326b99ec0a6ff1ab1338ac6c6cc62ad9d8a9c944197c7f8c6221" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-macosx_11_0_arm64.whl", hash = "sha256:c27e577ece613ea12a0790e00b4eb80d901c59a3e16cad474f31d8b1529690b9" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:07d9b9fa60cd4c393692f50d0bb03123242ddf61c99bb0e95e75feb354e7c1a8" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:30ec15d7eefee71de16b7c689b42ba49715a4644650b76a6c7c70d79daf24e91" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-musllinux_1_2_x86_64.whl", hash = "sha256:116cdb0eb0eb5644fc98eb2975d4b4dd4ad35e5c8e6b851c22e6976f371f7ab5" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-win_amd64.whl", hash = "sha256:a24d5fd36e4f0e742c3851dcd20810e56a95633a342e4bf6cb591c678e8fe61f" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp311-cp311-win_arm64.whl", hash = "sha256:57b9ea60a835937c2012861923cbb91f47db8565775d326d1c42fc926aa10351" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-macosx_10_13_x86_64.whl", hash = "sha256:ef752769cd962f39ea0b6ffc82d1ea43a0012c5a6157c7a075212fa509cfcff2" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-macosx_11_0_arm64.whl", hash = "sha256:ef31985c4dedb5f1424e1aec6849a47dd37689cb7fa3c20b1b82187f26806261" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:df4f7784aca81a94f254c0a2767d592ee25f407e488f5fa7203e51093fb6ca27" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-manylinux_2_26_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:1b9a7ad579856284135e401ecc918c5f8a017ee30539298862a109f51b971710" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-musllinux_1_2_x86_64.whl", hash = "sha256:3aa4b8516fd26659e4363abbf317c703d9116496c5db2e9d0609a2866dd39dd2" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-win_amd64.whl", hash = "sha256:c5c1c68ee401fc98271263410f0e5ce88285abacf7627132914e8adf3d70ff43" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-cp312-cp312-win_arm64.whl", hash = "sha256:643ff850d8e0f5b8319337f87ed3cb59506afb3df3cc48de777d85871233be7b" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-pp311-pypy311_pp73-macosx_10_15_x86_64.whl", hash = "sha256:854df8d7dfe9fdffcbaa6f39e44a6c24b409cb4d7561fbc09213b157d833f6a6" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-pp311-pypy311_pp73-macosx_11_0_arm64.whl", hash = "sha256:eac4b07d4e3743b172451e122ea964f72f152879d4f9adcf3f3d33e518f12ead" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/matplotlib/3.11.2/matplotlib-3.11.2-pp311-pypy311_pp73-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:7ef7a53b66780e5d942923724f08577fbc5be1f7322da0f0f3f9dcaa45dd803d" },
+]
+
+[[package]]
 name = "mpmath"
 version = "1.3.0"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
@@ -639,6 +859,15 @@ wheels = [
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/multidict/6.8.0/multidict-6.8.0-cp312-cp312-win_amd64.whl", hash = "sha256:7d26dc8f070c0ec5579e987fa615ffd6883086106eefdff9e10d160fc5630630" },
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/multidict/6.8.0/multidict-6.8.0-cp312-cp312-win_arm64.whl", hash = "sha256:e6ec7d37841609a691b96a10b4fde386c7cd93ebbb939f59c9f23325ee788395" },
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/multidict/6.8.0/multidict-6.8.0-py3-none-any.whl", hash = "sha256:75daa15ca16d6285eb2e104b2f05ee6f8d9836c68da3ce5c85f615a0450eed0e" },
+]
+
+[[package]]
+name = "narwhals"
+version = "2.26.0"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/narwhals/2.26.0/narwhals-2.26.0.tar.gz", hash = "sha256:6b9cadca82f375c7e4cf584fdc86ca25da54827307a9c58f94547ee6104b82dd" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/narwhals/2.26.0/narwhals-2.26.0-py3-none-any.whl", hash = "sha256:29326d74f107c347fd1009bd58e38d9f7c7c5b51e6de97bc93dbc325d9038b54" },
 ]
 
 [[package]]
@@ -872,22 +1101,22 @@ wheels = [
 
 [[package]]
 name = "opencv-python-headless"
-version = "5.0.0.93"
+version = "4.14.0.94"
 source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
 dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
 ]
-sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93.tar.gz", hash = "sha256:b82f9831daab90b725c7c1ee1b36cb5732c367096ac76d119e64e14eb70d5f3c" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94.tar.gz", hash = "sha256:4afa2ea1214453648be88259f035712454faa9039b686de7753569ba8eec1577" }
 wheels = [
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:030ca5e0837a2963ab36ef896baa9767eb8d2b83353fb28af5a521e40dd8756f" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:1e55af3abfb462eeeabe5c775f12bdb36216d8a93a3583d69e6bd6e1d6ba7d00" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:10818d91510e05c04568ae12b5cd120779c70c01bf897b001a6221fe430df80f" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:09a872a157c1376ab922a69bbf22f9a95bcc7b658a9d8b436a60212b02b2eeb4" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:840bd717c21e5c11cadadc022a823315ea417f961213d06b4df010e019eb16f4" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:ed709fdf9aa0bd1f2ed8549e71d19449b03a675bb581eb292285f6861953be37" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-win32.whl", hash = "sha256:c6bcd96b185975ea240d22cfdb15a1f6d080cc95264cfbe2621f21bb144d89b9" },
-    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/5.0.0.93/opencv_python_headless-5.0.0.93-cp37-abi3-win_amd64.whl", hash = "sha256:829717b6a95554f273e49e357cee3b3a2a26b6f4842fbc1bed2b45bdd8f87e0e" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-macosx_13_0_arm64.whl", hash = "sha256:bc7db37dc234f7bb3190a158fd9dd750357246fc7d8adb23698843ef721a993b" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-macosx_14_0_x86_64.whl", hash = "sha256:1777f43c9fa064f54b916ad70d944b4fde0a644a17e49f04a966bb24a4b5f1e1" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-manylinux2014_aarch64.manylinux_2_17_aarch64.whl", hash = "sha256:29714d7716dbfddf9fec20ffb878765e94ccaecd7d3ebd6750877420296e2dc5" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-manylinux2014_x86_64.manylinux_2_17_x86_64.whl", hash = "sha256:5e02669eac0ba67b2a22d7245af1e8ee1a2ef1185ee526a063d8f0555224bd52" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-manylinux_2_28_aarch64.whl", hash = "sha256:97c6e818c6f71c0cfa214e12293b1d0266d679c38f4e086de08357c8ac6ece0d" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-manylinux_2_28_x86_64.whl", hash = "sha256:211e581f5a4670acbbe08fff36a35e9946039d2eea28b80394632d036d1be527" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-win32.whl", hash = "sha256:f70296aa7ac9d7ade0d925c43fdc006c83e20a23f30e2f40f1b82c74a7a54460" },
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/opencv-python-headless/4.14.0.94/opencv_python_headless-4.14.0.94-cp37-abi3-win_amd64.whl", hash = "sha256:cbed65415b8f6a9541c705afe3e64795840524d0ff3bc58f507826284a1dc64b" },
 ]
 
 [[package]]
@@ -989,6 +1218,19 @@ wheels = [
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pillow/12.3.0/pillow-12.3.0-pp311-pypy311_pp73-manylinux_2_27_aarch64.manylinux_2_28_aarch64.whl", hash = "sha256:fbd139c8447d25dd750ab79ee274cc5e1fe80fc56340ab10b18a195e1b6eca3e" },
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pillow/12.3.0/pillow-12.3.0-pp311-pypy311_pp73-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:e7e480451b9fa137494bccd3a7d69adbe8ac65a87d97be61e11f1b1050a5bac3" },
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pillow/12.3.0/pillow-12.3.0-pp311-pypy311_pp73-win_amd64.whl", hash = "sha256:04f01d28a6aaff387bf842a13be313df23ba0597a44f1a976c9feb3c6ff4711a" },
+]
+
+[[package]]
+name = "plotly"
+version = "7.1.0"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+dependencies = [
+    { name = "narwhals" },
+    { name = "packaging" },
+]
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/plotly/7.1.0/plotly-7.1.0.tar.gz", hash = "sha256:f860166a4a3d78c69cb1f4a15f28a5c8283eade98a282a698f3bb853a449ace5" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/plotly/7.1.0/plotly-7.1.0-py3-none-any.whl", hash = "sha256:dbb7fa18afce40d0a8e80d1bf162eceb3faa0ce5a77fe741ad09a74cf78f53f3" },
 ]
 
 [[package]]
@@ -1122,6 +1364,15 @@ source = { registry = "https://package-cache-pypi.query.consul-tech/repository/p
 sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pygments/2.21.0/pygments-2.21.0.tar.gz", hash = "sha256:610ca751c9bc2492b38eb9a38a7fbc93edbbb2d7182edaf34e66ae493dee5c8c" }
 wheels = [
     { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pygments/2.21.0/pygments-2.21.0-py3-none-any.whl", hash = "sha256:2363c69b61c4a97c838da3b130dcd6468f4848992b21a82f2a63ec34377137d9" },
+]
+
+[[package]]
+name = "pyparsing"
+version = "3.3.2"
+source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }
+sdist = { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pyparsing/3.3.2/pyparsing-3.3.2.tar.gz", hash = "sha256:c777f4d763f140633dcb6d8a3eda953bf7a214dc4eff598413c070bcdc117cbc" }
+wheels = [
+    { url = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/packages/pyparsing/3.3.2/pyparsing-3.3.2-py3-none-any.whl", hash = "sha256:850ba148bd908d7e2411587e247a1e4f0327839c40e2e5e6d05a007ecc69911d" },
 ]
 
 [[package]]
@@ -1816,6 +2067,7 @@ version = "0.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "albumentations" },
+    { name = "catboost" },
     { name = "einops" },
     { name = "ftfy" },
     { name = "huggingface-hub" },
@@ -1824,6 +2076,7 @@ dependencies = [
     { name = "numpy", version = "2.4.6", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version < '3.12'" },
     { name = "numpy", version = "2.5.3", source = { registry = "https://package-cache-pypi.query.consul-tech/repository/pypi-public/simple" }, marker = "python_full_version >= '3.12'" },
     { name = "open-clip-torch" },
+    { name = "opencv-python-headless" },
     { name = "optuna" },
     { name = "optuna-dashboard" },
     { name = "pandas" },
@@ -1852,6 +2105,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "albumentations", specifier = "==2.0.8" },
+    { name = "catboost", specifier = ">=1.2,<2" },
     { name = "einops", specifier = ">=0.8" },
     { name = "ftfy" },
     { name = "huggingface-hub", specifier = ">=0.34,<1" },
@@ -1859,6 +2113,7 @@ requires-dist = [
     { name = "lightning", specifier = "==2.5.5" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "open-clip-torch", specifier = "==3.1.0" },
+    { name = "opencv-python-headless", specifier = ">=4.10,<5" },
     { name = "optuna", specifier = ">=4.5,<5" },
     { name = "optuna-dashboard", specifier = ">=0.17,<1" },
     { name = "pandas", specifier = "==2.3.2" },

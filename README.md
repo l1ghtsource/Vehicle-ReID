@@ -16,8 +16,9 @@ to the dataset and label mapping that produced them.
 - ArcFace, CosFace, SphereFace2, triplet, AdaSP, and pytorch-metric-learning losses.
 - P × K identity sampling with optional camera-diverse instance selection.
 - Backbone freezing, layer-wise learning-rate decay, R-Drop, AWP, and EMA.
-- Test-time augmentation over flips, rotations, scales, and bounding-box context.
-- Gallery aggregation, average query expansion, k-reciprocal reranking, and GNN reranking.
+- Test-time augmentation over flips, rotations, scales, and bounding-box context of a single image.
+- Streaming retrieval postproc: gallery-side aggregation and per-query rerank. AQE is OOF-only.
+- Open-set refusal: cosine threshold, CatBoost, and TabM on retrieval-set features.
 - Reproducible GroupKFold splits with no vehicle identity overlap between train and validation.
 - CPU/offline test suite with 100% line coverage for first-party Python code.
 
@@ -175,6 +176,7 @@ configs/
 ├── loss/
 ├── model/
 ├── optimizer/
+├── refusal/
 └── scheduler/
 ```
 
@@ -212,7 +214,7 @@ Important configuration sections:
 - `train`: gradient accumulation, clipping, freezing, R-Drop, AWP, EMA, and layer decay.
 - `trainer`: Lightning accelerator, devices, precision, strategy, and batch limits.
 - `eval`: checkpoint weights, split, device, precision, TTA, output directory, and top-K.
-- `postproc`: query expansion, gallery aggregation, reranking, and dense-memory budget.
+- `postproc`: gallery aggregation, per-query reranking, dense-memory budget. AQE is not used at serve.
 
 ## Backbones
 
@@ -376,6 +378,22 @@ Generate test query/gallery retrieval results:
   eval.split=test
 ```
 
+Open-set refusal is applied only to contest `candidates.csv`. Serving heads and frozen thresholds
+live in `configs/refusal/`. Default `refusal=none` writes every query. EVA02 serving presets drop
+refused queries (no rows for that `query_id`). Internal `submission.csv` stays a complete top-K
+table.
+
+```bash
+.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_threshold
+.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_model
+.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_ensemble
+```
+
+`eva02_model` and `eva02_ensemble` need a `.cbm` at `refusal.model_path` (default
+`artifacts/refusal/eva02_catboost.cbm` from `refusal.save_boosting`). Thresholds in those YAMLs are
+frozen EVA02 nested 5-fold inner-CV operating points, not retuned on the test set. TabM remains a
+`refusal/` calibration head and is not a submit preset.
+
 Select checkpoint weights with:
 
 ```bash
@@ -500,22 +518,35 @@ row = compare_query(
 
 ### Postprocessing
 
-Enable transductive retrieval postprocessing:
+The closed test is a **stream**: the full `test_gallery.csv` is a static database and may be
+indexed in advance; each `test_query.csv` row is handled independently. Other test queries and
+their results are not available. `submission.csv` is the final ranking after any allowed rerank
+(cosine search, then optional pairwise/local-feature or k-reciprocal inside that query's top-K).
+It does not have to match a raw nearest-neighbor list from `embeddings.npy`.
+
+Allowed at serve (`postproc.streaming=true`, the default):
+
+- Per-image TTA (flip, rotation, scale, extra bbox context of the current crop).
+- Gallery-only mutual-neighbor aggregation (the gallery is static).
+- k-reciprocal or GNN rerank of **one query** against the gallery (no query–query graph).
+
+Not used at serve, even though the code still exists for local OOF:
+
+- Average query expansion, including `gallery_only` AQE. Organizers forbid query expansion.
+- Joint k-reciprocal / GNN over the whole query batch (`q @ q.T`).
+- Clustering or other methods that mix test queries.
+
+`eval.py` raises if AQE is enabled under streaming. OOF notebooks still call `aqe()` / joint
+rerankers directly to measure the gap; those numbers are not the submission recipe.
+`current_best_tuned` leaves postproc off.
 
 ```bash
 .venv/bin/python eval.py \
   checkpoint=/path/to/model.ckpt \
   postproc.enabled=true \
-  postproc.aqe.enabled=true \
-  postproc.rerank.kind=gnn
+  postproc.gallery_aggregation.enabled=true \
+  postproc.rerank.kind=k_reciprocal
 ```
-
-Supported stages:
-
-- Mutual-neighbor gallery prototype aggregation.
-- Alpha-weighted average query expansion.
-- k-reciprocal reranking.
-- GNN reranking.
 
 Dense reranking estimates its memory requirement before allocation and stops when it exceeds
 `postproc.max_dense_gb`.
@@ -524,18 +555,66 @@ Dense reranking estimates its memory requirement before allocation and stops whe
 
 The evaluation directory contains:
 
-- `embeddings.npy`: normalized raw model embeddings.
+- `embeddings.npy`: contest embedding matrix for `eval.split=test`. Rows are `test_query.csv` in
+  file order, then `test_gallery.csv` in file order, with no extra sort. Shape
+  `(len(query)+len(gallery), D)`, `float32`. Vectors are L2-normalized after TTA; the official
+  scorer also L2-normalizes, so that is optional on their side. `query_id` / `gallery_id` are
+  `image_id`. Local `eval.split=val` writes the same file over the held-out fold table instead.
 - `retrieval_embeddings.npy`: query and gallery embeddings after enabled expansion stages.
 - `distances.npy`: final query-to-gallery distance matrix, when enabled.
-- `submission.csv`: stable top-K gallery ranking for each query.
+- `submission.csv`: internal wide top-K table (`query_id,gallery_id_1,...`).
+- `candidates.csv`: contest file. Columns `query_id,gallery_id,confidence` in that order, header
+  required. One row per ranked hit. `refusal=` (`none` / `eva02_threshold` / `eva02_model` /
+  `eva02_ensemble`) decides which queries are written; a refused query has **no rows**. Empty
+  `gallery_id` and placeholder values are not written (the scorer ignores them anyway).
 - `query.csv` and `gallery.csv`: exact evaluated row order.
-- `embedding_order.csv`: row order corresponding to `embeddings.npy`.
+- `embedding_order.csv`: sidecar `image_id` list for `embeddings.npy` (not required by the scorer).
 - `metrics.json`: run metadata and validation metrics when labels are available.
 - `config.yaml`: resolved evaluation configuration.
 
 Validation reports full-gallery mAP (checkpoint selection and Optuna), official mAP@10 over the
 submission top-10, mINP, and configured CMC ranks. Queries with no valid positive are counted
 and excluded from metric averages; evaluation fails if no query has a valid positive.
+
+## Open-set refusal
+
+The closed test set is an unmarked open-set probe: about 20% of queries have no corresponding
+vehicle in the gallery, and those queries are not flagged in any released file. The remaining 80%
+are guaranteed at least one cross-camera positive. Local calibration does **not** copy that 20/80
+mixture. It uses the same 5 identity-disjoint OOF folds, nested: models and operating points are
+fit with inner CV on four folds, then scored on the held fold. Labels are the 50/50 pairs
+(full gallery vs that identity stripped from the gallery). Prevalence on this probe is therefore
+balanced, not 20% open.
+
+`refusal/` implements three accept/refuse heads on top of frozen retrieval embeddings, plus
+ensembles of those heads. None of them uses `camera_id` or `vehicle_id` as a feature; those labels
+exist only while building the training pairs.
+
+1. **Cosine threshold.** Score is the maximum query-gallery cosine (optionally the top-1/top-2
+   gap). The operating point is maximum F1 on inner-CV scores, never on the reported fold.
+2. **CatBoost.** A binary classifier on the retrieved set. Training examples are balanced 50/50 by
+   scoring the same query against the full gallery (`y=1`) and against the gallery with that
+   identity removed (`y=0`). Features are similarity statistics, pairwise/graph descriptors of the
+   top-k neighbors, and the concatenated query and top-1 gallery embeddings.
+3. **TabM.** A parameter-efficient MLP ensemble after Gorishniy et al., ICLR 2025: shared linear
+   weights, BatchEnsemble rank-1 input/output scales, `k` member logits trained jointly, mean
+   sigmoid at inference, and train-set feature standardization.
+4. **Ensembles.** Rank-average and votes of the three heads are **OOF calibration only** (ranks
+   use the query batch). Serving `eva02_ensemble` is a streaming-safe unanimous vote: accept if
+   both the frozen cosine and CatBoost heads accept that query.
+
+Candidate-mode metrics, matching the contest briefing:
+
+- **F1** at the team-chosen threshold (primary).
+- **TNR** on queries whose identity is absent from the gallery.
+- **PR-AUC** (threshold-free match/no-match ranking; the briefing also allows mINP).
+
+`eval.py` selects a frozen submit head with `refusal=` (`none`, `eva02_threshold`, `eva02_model`,
+`eva02_ensemble`). Serving thresholds and the CatBoost path live in `configs/refusal/`. Default
+`none` writes every query. The mask is applied to `candidates.csv` only. Each head scores one
+query against the gallery; serving does not rank-average across the test query batch.
+
+`notebooks/eva02/refusal_analysis.ipynb` compares the heads and ensembles on EVA02 5-fold OOF.
 
 ## Pretrained weights and offline use
 
@@ -616,7 +695,8 @@ default assignment:
 `hpo/optuna_search_space.py` defines the complete search space. It samples input size and crop
 context, P×K sampling, backbone optimization controls, pooling, head, every supported loss and its
 parameters, optimizer, scheduler, regularization, every augmentation transform and parameter, TTA,
-AQE, gallery aggregation, and reranking. The selected model architecture, checkpoint, five-fold
+AQE, gallery aggregation, and reranking. AQE and joint query-batch rerank are sampled for local OOF
+only; contest serving (`postproc.streaming=true`) does not apply them. The selected model architecture, checkpoint, five-fold
 protocol, data paths, fold assignment, worker and loader settings, precision, deterministic mode,
 logging, checkpoint policy, metric protocol, and output paths stay fixed so trials remain
 comparable and operational settings do not consume search trials.
@@ -728,15 +808,16 @@ exclusion. Function-local imports are forbidden by Ruff rule `PLC0415`.
 
 ```text
 augmentations/  Config-driven image augmentation pipeline
-configs/        Hydra model, loss, optimizer, scheduler, and experiment presets
+configs/        Hydra model, loss, optimizer, scheduler, refusal, and experiment presets
 dataset/        Annotation validation, folds, datasets, data module, pretrain loaders, and samplers
 extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: Grad-CAM, HiResCAM, LayerCAM, EigenCAM, attention rollout, Chefer
-notebooks/      EDA, OOF analysis (`oof_analysis_eva02.ipynb`), interpretation (`interp_eva02.ipynb`), robustness (`posthoc_eva02.ipynb`)
+notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`)
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
+refusal/        Open-set accept/refuse: cosine threshold, CatBoost, TabM, eval-time mask, contest F1/TNR/PR-AUC
 scripts/        Dataset audit, fold creation, weight download, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
 third_party/    Vendored upstream implementations
@@ -744,7 +825,3 @@ pretrain.py     Hydra pretraining entrypoint on extra data
 train.py        Hydra training entrypoint
 eval.py         Checkpoint-driven evaluation and retrieval entrypoint
 ```
-
-## Current limitations
-
-- Open-set refusal is not implemented; every query currently receives a ranked gallery result.
