@@ -49,6 +49,23 @@ def attention_rollout(model, images, reference=None):
     return _cls_maps(joint, prefix_tokens(model), size)
 
 
+def grad_rollout(model, images, reference=None):
+    maps, score, size = _forward_attentions(model, images, reference, True)
+    tokens = maps[0].shape[-1]
+    joint = None
+    eye = None
+    for attn in maps:
+        grad = torch.autograd.grad(score, attn, retain_graph=True)[0]
+        mix = (grad * attn).clamp_min(0).mean(1)
+        mix = mix / mix.sum(dim=-1, keepdim=True).clamp_min(1e-12)
+        if eye is None:
+            eye = torch.eye(tokens, device=mix.device, dtype=mix.dtype).expand(len(mix), tokens, tokens)
+            joint = eye
+        residual = 0.5 * mix + 0.5 * eye
+        joint = residual @ joint
+    return _cls_maps(joint, prefix_tokens(model), size)
+
+
 def chefer_attribution(model, images, reference=None):
     maps, score, size = _forward_attentions(model, images, reference, True)
     tokens = maps[0].shape[-1]

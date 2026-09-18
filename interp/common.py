@@ -63,20 +63,24 @@ def overlay(image, heatmap, alpha=0.45):
     return np.clip((1.0 - alpha) * rgb + alpha * color, 0, 255).astype(np.uint8)
 
 
-def embedding_score(out, reference=None):
+def embedding_scores(out, reference=None):
     if isinstance(out, dict):
         emb = out["embedding"]
         feat = out["neck"] if "neck" in out else out.get("raw", emb)
     else:
         emb = feat = out
     if reference is None:
-        return feat.float().pow(2).sum()
+        return feat.float().pow(2).sum(-1)
     ref = F.normalize(torch.as_tensor(reference, device=emb.device, dtype=torch.float32), dim=-1)
     if ref.ndim == 1:
         ref = ref.unsqueeze(0)
     if ref.shape[0] not in {1, len(emb)} or ref.shape[-1] != emb.shape[-1]:
         raise ValueError("reference embedding must match the batch embedding width")
-    return (emb.float() * ref).sum()
+    return (emb.float() * ref).sum(-1)
+
+
+def embedding_score(out, reference=None):
+    return embedding_scores(out, reference).sum()
 
 
 class Unfrozen:

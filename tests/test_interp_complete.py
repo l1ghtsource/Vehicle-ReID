@@ -6,10 +6,19 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
-from interp import METHODS, interpret, normalize_maps, overlay
+from interp import METHODS, embed_images, interpret, interpret_pair, normalize_maps, overlay
 from interp.attention import _cls_maps, attention_rollout, chefer_attribution, last_attention
 from interp.cam import eigen_cam, grad_cam
-from interp.common import AttentionCapture, Unfrozen, as_nchw, embedding_score, prefix_tokens, upsample
+from interp.common import (
+    AttentionCapture,
+    Unfrozen,
+    as_nchw,
+    embedding_score,
+    embedding_scores,
+    prefix_tokens,
+    upsample,
+)
+from interp.occlusion import occlusion
 from interp.pooling import pooling_attention
 from models.pooling import Pool
 from models.reid import ReIDModel
@@ -86,6 +95,11 @@ class TinyReID(nn.Module):
         pooled = self.pools[0](levels[0])
         raw = self.proj(pooled)
         return {"raw": raw, "neck": raw, "embedding": F.normalize(raw.float(), dim=1)}
+
+
+class TensorOutReID(TinyReID):
+    def forward(self, x):
+        return super().forward(x)["embedding"]
 
 
 class EmptyBackbone(nn.Module):
@@ -221,6 +235,7 @@ def test_common_helpers_and_guards():
 
     emb = {"embedding": F.normalize(torch.ones(2, 4), dim=1)}
     assert embedding_score(emb).ndim == 0
+    assert embedding_scores(emb).shape == (2,)
     neck = {"neck": torch.tensor([[2.0, 0.0], [0.0, 3.0]]), "embedding": F.normalize(torch.ones(2, 2), dim=1)}
     assert float(embedding_score(neck)) == 13.0
     assert embedding_score(emb["embedding"], torch.ones(4)).ndim == 0
@@ -260,6 +275,9 @@ def test_all_methods_on_tiny_vit():
     a = interpret(model, x[:1], method="gradcam", reference=ref_a)
     b = interpret(model, x[:1], method="gradcam", reference=ref_b)
     assert a.shape == b.shape
+    sim_a = interpret(model, x[:1], method="gradsim", reference=ref_a)
+    sim_b = interpret(model, x[:1], method="grad_rollout", reference=ref_b)
+    assert sim_a.shape == sim_b.shape == (1, 8, 8)
     with pytest.raises(ValueError, match="Unknown"):
         interpret(model, x, method="smoothgrad")
     with pytest.raises(ValueError, match="NCHW"):
@@ -319,17 +337,55 @@ def test_attention_methods_require_vit_softmax():
     assert maps.shape == (2, 8, 8)
 
 
+def test_pair_cosine_and_occlusion():
+    model = TinyReID()
+    query = images(1)
+    torch.manual_seed(1)
+    gallery = torch.randn(1, 3, 8, 8)
+    q_maps, g_maps, cosine = interpret_pair(model, query, gallery, method="gradsim")
+    assert q_maps.shape == g_maps.shape == (1, 8, 8)
+    assert cosine.shape == (1,)
+    assert -1.01 <= float(cosine[0]) <= 1.01
+    blocked = occlusion(model, query, reference=torch.ones(8), block=2)
+    assert blocked.shape == (1, 8, 8)
+    assert np.isfinite(blocked).all()
+    ignored = interpret(model, query, method="gradsim", block=4, level=0)
+    assert ignored.shape == (1, 8, 8)
+    q_occ, g_occ, occ_cos = interpret_pair(model, query, gallery, method="occlusion", block=2)
+    assert q_occ.shape == g_occ.shape == (1, 8, 8)
+    assert occ_cos.shape == (1,)
+    again = embed_images(TensorOutReID(), query)
+    assert again.shape == (1, 8)
+    with pytest.raises(ValueError, match="NCHW"):
+        embed_images(model, torch.randn(3, 8, 8))
+    with pytest.raises(ValueError, match="batch"):
+        interpret_pair(model, query, images(2), method="gradsim")
+    with pytest.raises(ValueError, match="Unknown"):
+        interpret_pair(model, query, gallery, method="smoothgrad")
+    with pytest.raises(ValueError, match="block"):
+        occlusion(model, query, block=0)
+    with pytest.raises(ValueError, match="NCHW"):
+        occlusion(model, torch.randn(3, 8, 8))
+    with pytest.raises(RuntimeError, match="hooked"):
+        occlusion(HooklessReID(), query)
+
+
 def test_cnn_cam_on_smoke_reid(cfg):
     cfg.model.pretrained = False
     cfg.model.pooling.kind = "gem"
     model = ReIDModel(cfg, initialize_pretrained=False)
     x = torch.randn(1, 3, 64, 64)
-    for name in ("gradcam", "hirescam", "layercam", "eigencam", "pooling"):
+    for name in ("gradcam", "hirescam", "layercam", "eigencam", "pooling", "gradsim"):
         maps = interpret(model, x, method=name)
         assert maps.shape == (1, 64, 64)
         assert np.isfinite(maps).all()
+    occ = interpret(model, x, method="occlusion", block=2)
+    assert occ.shape == (1, 64, 64)
+    assert np.isfinite(occ).all()
     with pytest.raises(ValueError, match="token-attention"):
         interpret(model, x, method="rollout")
+    with pytest.raises(ValueError, match="token-attention"):
+        interpret(model, x, method="grad_rollout")
     with Unfrozen(model):
         assert model.training is False
     model.freeze_backbone(True)

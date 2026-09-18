@@ -476,27 +476,34 @@ Embeddings from all enabled views and bounding-box context values are averaged a
 
 ### Embedding interpretation
 
-`interp/` implements several standard attribution maps for a retrieval embedding, not a classifier
-logit. The default target is embedding energy; pass a reference vector to explain
-cosine(query, gallery) instead.
+`interp/` attributes a retrieval embedding, not a classifier logit. The default target is
+pre-normalization embedding energy; pass a gallery vector as `reference` to explain
+`cosine(query, gallery)` instead. `interpret_pair` embeds both images, then attributes each
+side of that cosine.
 
 | Method | What it shows |
 | --- | --- |
 | `pooling` | Spatial weights of the trained attention pooler (the aggregation the embedding actually uses) |
 | `last_attn` | Last-layer CLS-to-patch attention, averaged over heads |
-| `rollout` | Attention rollout with residual identity (Abnar & Zuidema, 2020) |
+| `rollout` | Attention rollout with residual identity (Abnar & Zuidema, 2020); image-general, not pair-specific |
+| `grad_rollout` | Same residual rollout, but attention is weighted by the cosine-similarity gradient |
 | `chefer` | Transformer attribution: attention × gradient relevancy (Chefer et al., 2021) |
+| `gradsim` | `|grad × activation|` on last patch tokens with cosine (or energy) as the scalar target |
 | `gradcam` | Grad-CAM on the last backbone feature map (Selvaraju et al., 2017) |
 | `hirescam` | HiResCAM, element-wise gradient × activation |
 | `layercam` | LayerCAM, ReLU(gradient) × activation |
 | `eigencam` | EigenCAM, first principal component of activations (no labels/gradients) |
+| `occlusion` | Cosine (or energy) drop after zeroing a patch block; `block=` groups the backbone grid |
 
 ```python
-from interp import interpret, overlay
+from interp import interpret, interpret_pair, overlay
 
 maps = interpret(model, images, method="gradcam")
 maps = interpret(model, images, method="chefer", reference=gallery_embedding)
-canvas = overlay(crop_hwc, maps[0])
+query_maps, gallery_maps, cosine = interpret_pair(
+    model, query, gallery, method="gradsim", block=4
+)
+canvas = overlay(crop_hwc, query_maps[0])
 ```
 
 ### Embedding robustness (post-hoc)
@@ -1010,7 +1017,7 @@ dataset/        Annotation validation, folds, datasets, data module, pretrain lo
 extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
-interp/         Embedding attribution: Grad-CAM, HiResCAM, LayerCAM, EigenCAM, attention rollout, Chefer
+interp/         Embedding attribution: cosine Grad-Sim, Grad-Attention rollout, patch occlusion, CAM, Chefer
 notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`), inference profile (`eva02/inference_profile.ipynb`)
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking

@@ -42,6 +42,11 @@ def layer_cam(model, images, reference=None):
     return _maps((grad.clamp_min(0) * act).sum(1), size)
 
 
+def grad_sim(model, images, reference=None):
+    act, grad, size = _activations(model, images, reference, True)
+    return _maps((grad * act).abs().sum(1), size)
+
+
 def eigen_cam(model, images, reference=None):
     act, _, size = _activations(model, images, reference, False)
     batch, _, height, width = act.shape
