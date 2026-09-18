@@ -48,10 +48,11 @@ def vote_fraction(scores, thresholds):
     return (matrix >= t).mean(axis=1)
 
 
-def fit_rank_weights(y, scores, grid=4):
+def fit_rank_weights(y, scores, top_correct, grid=4):
     matrix = score_matrix(scores)
     y = np.asarray(y, dtype=int).reshape(-1)
-    if y.shape[0] != matrix.shape[0]:
+    top = np.asarray(top_correct, dtype=bool).reshape(-1)
+    if y.shape[0] != matrix.shape[0] or top.shape[0] != matrix.shape[0]:
         raise ValueError("y must align with scores")
     if int(grid) < 2:
         raise ValueError("grid must be >= 2")
@@ -65,7 +66,7 @@ def fit_rank_weights(y, scores, grid=4):
         w = axis[idx]
         if float(w.sum()) > 0:
             blended = rank_average([matrix[:, j] for j in range(n)], weights=w)
-            picked = select_threshold(y, blended, kind="max_f1")
+            picked = select_threshold(y, blended, top, kind="max_f1")
             key = (picked["f1"], picked["tnr"], -picked["threshold"])
             if best_key is None or key > best_key:
                 best_key = key

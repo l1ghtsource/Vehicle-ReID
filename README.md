@@ -611,11 +611,10 @@ exist only while building the training pairs.
    use the query batch). Serving `eva02_ensemble` is a streaming-safe unanimous vote: accept if
    both the frozen cosine and CatBoost heads accept that query.
 
-Candidate-mode metrics, matching the contest briefing:
-
-- **F1** at the team-chosen threshold (primary).
-- **TNR** on queries whose identity is absent from the gallery.
-- **PR-AUC** (threshold-free match/no-match ranking; the briefing also allows mINP).
+Contest F1 is query-level, not pair-level: TP only if the query has a gallery match **and**
+the highest-confidence candidate is that identity. Extra candidates below rank-1 do not
+change F1 or TNR. Wrong top-1 on a closed query is FP, not TP. TNR uses only queries with
+no gallery match. PR-AUC remains a threshold-free ranking of match vs no-match queries.
 
 `eval.py` selects a frozen submit head with `refusal=` (`none`, `eva02_threshold`, `eva02_model`,
 `eva02_ensemble`). Serving thresholds and the CatBoost path live in `configs/refusal/`. Default

@@ -31,6 +31,7 @@ from refusal import (
     similarities,
     stat_vector,
     sweep_thresholds,
+    top_hit,
     vote_fraction,
     write_candidates,
 )
@@ -103,9 +104,19 @@ def test_protocol_open_set_and_masks():
     assert len(masked) == int(keep.sum())
     pos_neg, labels = balanced_pairs(query, gallery, qids, gids, k=4, with_embeddings=False)
     assert set(labels.tolist()) == {0, 1} and len(pos_neg) == 6
-    packed_x, packed_y, packed_cos = balanced_pack(query, gallery, qids, gids, k=4, with_embeddings=False)
+    packed_x, packed_y, packed_cos, packed_hit = balanced_pack(
+        query, gallery, qids, gids, k=4, with_embeddings=False
+    )
     assert packed_y.tolist() == labels.tolist() and packed_cos.shape == packed_y.shape
     assert packed_cos[0] > packed_cos[1]
+    assert packed_hit.dtype == bool and not packed_hit[1]
+    assert packed_hit[0] == top_hit(query[:1], gallery, qids[:1], gids)[0]
+    hit = top_hit(query, gallery, qids, gids)
+    assert hit.shape == (3,) and hit.dtype == bool
+    with pytest.raises(ValueError, match="query identities"):
+        top_hit(query, gallery, qids[:1], gids)
+    with pytest.raises(ValueError, match="gallery identities"):
+        top_hit(query, gallery, qids, gids[:3])
     one, one_y = balanced_pairs(query[0], gallery, qids[:1], gids, k=3)
     assert one.shape[0] == 2 and one_y.tolist() == [1, 0]
     missing, miss_y = balanced_pairs(query[2:3], gallery, np.array([99]), gids, k=3, with_embeddings=False)
@@ -131,33 +142,43 @@ def test_protocol_open_set_and_masks():
 def test_metrics_threshold_rules_and_baselines():
     y = np.array([1, 1, 1, 0, 0, 0])
     scores = np.array([0.9, 0.8, 0.1, 0.7, 0.05, 0.02])
-    hit = candidate_metrics(y, scores, 0.5)
-    assert hit["tp"] == 2 and hit["fn"] == 1 and hit["tn"] == 2
+    top = np.array([1, 1, 1, 0, 0, 0])
+    hit = candidate_metrics(y, scores, 0.5, top)
+    assert hit["tp"] == 2 and hit["fn"] == 1 and hit["tn"] == 2 and hit["fp"] == 1
+    assert hit["fp_open"] == 1 and hit["fp_closed"] == 0
     assert 0 < hit["f1"] < 1 and 0 < hit["tnr"] < 1
+    wrong = np.array([1, 0, 1, 0, 0, 0])
+    mixed = candidate_metrics(y, scores, 0.5, wrong)
+    assert mixed["tp"] == 1 and mixed["fp"] == 2 and mixed["fp_closed"] == 1
+    assert mixed["tnr"] == pytest.approx(2 / 3)
     rank = ranking_metrics(y, scores)
     assert 0.5 < rank["pr_auc"] <= 1 and 0.5 < rank["roc_auc"] <= 1
-    always = candidate_metrics(y, scores, -1)
+    always = candidate_metrics(y, scores, -1, top)
     assert always["recall"] == 1 and always["tnr"] == 0
-    refuse = candidate_metrics(y, scores, 2)
+    refuse = candidate_metrics(y, scores, 2, top)
     assert refuse["f1"] == 0 and refuse["tnr"] == 1
     assert decide(scores, 0.5).sum() == 3
-    f1 = select_threshold(y, scores, kind="max_f1")
-    youden = select_threshold(y, scores, kind="youden")
-    mixed = select_threshold(y, scores, kind="f1_tnr")
-    constrained = select_threshold(y, scores, kind="max_f1", min_tnr=0.9)
-    infeasible = select_threshold(y, scores, kind="max_f1", min_tnr=1.1)
+    f1 = select_threshold(y, scores, top, kind="max_f1")
+    youden = select_threshold(y, scores, top, kind="youden")
+    mixed_rule = select_threshold(y, scores, top, kind="f1_tnr")
+    constrained = select_threshold(y, scores, top, kind="max_f1", min_tnr=0.9)
+    infeasible = select_threshold(y, scores, top, kind="max_f1", min_tnr=1.1)
     assert f1["f1"] >= youden["f1"] or youden["tnr"] >= f1["tnr"]
-    assert mixed["threshold"] >= 0
+    assert mixed_rule["threshold"] >= 0
     assert constrained["tnr"] >= 0.5
     assert infeasible["f1"] >= 0
-    custom = sweep_thresholds(y, scores, thresholds=[0.0, 0.5, 1.0])
+    custom = sweep_thresholds(y, scores, top, thresholds=[0.0, 0.5, 1.0])
     assert len(custom) == 3
     with pytest.raises(ValueError, match="Unknown"):
-        select_threshold(y, scores, kind="banana")
+        select_threshold(y, scores, top, kind="banana")
     with pytest.raises(ValueError, match="aligned"):
-        candidate_metrics(y, scores[:2], 0.1)
-    with pytest.raises(ValueError, match="empty"):
-        candidate_metrics([], [], 0.1)
+        candidate_metrics(y, scores[:2], 0.1, top)
+    with pytest.raises(ValueError, match="aligned"):
+        candidate_metrics([], [], 0.1, [])
+    with pytest.raises(ValueError, match="aligned"):
+        candidate_metrics(y, scores, 0.1, top[:2])
+    with pytest.raises(ValueError, match="aligned"):
+        sweep_thresholds([], [], [])
     with pytest.raises(ValueError, match="both"):
         ranking_metrics(np.ones(4), np.linspace(0, 1, 4))
     with pytest.raises(ValueError, match="aligned"):
@@ -255,7 +276,7 @@ def test_rank_ensemble_and_votes():
     np.testing.assert_allclose(weighted, rank_average([a, a], weights=[1.0, 0.0]))
     votes = vote_fraction([a, b, c], [0.5, 0.5, 0.5])
     assert votes[0] == 1.0 and 0 <= votes.min() <= votes.max() <= 1
-    w, picked = fit_rank_weights(y, [a, b, c], grid=3)
+    w, picked = fit_rank_weights(y, [a, b, c], y.astype(bool), grid=3)
     assert w.shape == (3,) and abs(w.sum() - 1) < 1e-12 and picked["f1"] > 0
     assert rank_scores(np.array([0.3]))[0] == 0.5
     with pytest.raises(ValueError, match="two score"):
@@ -271,9 +292,9 @@ def test_rank_ensemble_and_votes():
     with pytest.raises(ValueError, match="thresholds"):
         vote_fraction([a, b], [0.5])
     with pytest.raises(ValueError, match="align"):
-        fit_rank_weights(y[:3], [a, b])
+        fit_rank_weights(y[:3], [a, b], y[:3].astype(bool))
     with pytest.raises(ValueError, match="grid"):
-        fit_rank_weights(y, [a, b], grid=1)
+        fit_rank_weights(y, [a, b], y.astype(bool), grid=1)
 
 
 def test_candidates_csv_omits_refused_queries(tmp_path):

@@ -273,13 +273,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6372)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6532)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.4149)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.4329)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6372)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.4149)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6532)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.4329)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 

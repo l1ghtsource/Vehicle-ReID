@@ -1,8 +1,8 @@
-# EVA02 nested 5-fold inner-CV mean CatBoost P(match exists).
+# EVA02 nested 5-fold inner-CV mean CatBoost P(match exists), contest query-level F1.
 kind: model
 cosine_threshold: null
 model_path: weights/finetuned/eva02_catboost.cbm
-model_threshold: 0.4149
+model_threshold: 0.4329
 rank_threshold: null
 k: 10
 with_embeddings: true
