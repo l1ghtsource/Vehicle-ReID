@@ -228,10 +228,6 @@ Available model presets include:
 - `radio`
 - `llm2clip`
 
-Pretrained models are never silently replaced with another architecture. Feature dimensions and
-layouts are validated at runtime. Hugging Face adapters require explicit feature dimensions, and
-LLM2CLIP uses its required 336 × 336 input resolution.
-
 To test backbone construction and gradients on CUDA:
 
 ```bash
@@ -419,13 +415,6 @@ and a combined file is written to `artifacts/zero_shot/summary.json`:
 scripts/zero_shot_weights.sh cuda:2
 ```
 
-LLM2CLIP is forced to 336 × 336 and CLS pooling. Extra Hydra overrides can follow the device
-argument.
-
-Metrics are written to `artifacts/zero_shot/dinov3_convnext_base/metrics.json` for a single-model
-run. Pass extra Hydra overrides after the model name (`data.root`, `eval.tta.enabled`,
-`postproc.enabled`, and so on).
-
 Measured out-of-the-box retrieval on 100% of competition `train.csv` (1541 queries, 5550 gallery
 images, cross-camera protocol, no TTA or reranking). These scores are a pretrained-backbone probe,
 not identity-disjoint fold OOF:
@@ -436,9 +425,6 @@ not identity-disjoint fold OOF:
 | DINOv3 ConvNeXt Large | 0.189 | 0.175 | 0.323 | 0.412 | 0.136 |
 | RADIO C-RADIOv4-SO400M | 0.171 | 0.176 | 0.295 | 0.360 | 0.112 |
 | LLM2CLIP EVA02-L-14-336 | 0.334 | 0.352 | 0.519 | 0.619 | 0.236 |
-
-LLM2CLIP is the strongest frozen backbone on this probe. ConvNeXt Large is slightly ahead of ConvNeXt
-Base and RADIO, which are close to each other.
 
 ### Test-time augmentation
 
@@ -454,6 +440,31 @@ TTA is configured in `eval.tta`:
 ```
 
 Embeddings from all enabled views and bounding-box context values are averaged and normalized.
+
+### Embedding interpretation
+
+`interp/` implements several standard attribution maps for a retrieval embedding, not a classifier
+logit. The default target is embedding energy; pass a reference vector to explain
+cosine(query, gallery) instead.
+
+| Method | What it shows |
+| --- | --- |
+| `pooling` | Spatial weights of the trained attention pooler (the aggregation the embedding actually uses) |
+| `last_attn` | Last-layer CLS-to-patch attention, averaged over heads |
+| `rollout` | Attention rollout with residual identity (Abnar & Zuidema, 2020) |
+| `chefer` | Transformer attribution: attention × gradient relevancy (Chefer et al., 2021) |
+| `gradcam` | Grad-CAM on the last backbone feature map (Selvaraju et al., 2017) |
+| `hirescam` | HiResCAM, element-wise gradient × activation |
+| `layercam` | LayerCAM, ReLU(gradient) × activation |
+| `eigencam` | EigenCAM, first principal component of activations (no labels/gradients) |
+
+```python
+from interp import interpret, overlay
+
+maps = interpret(model, images, method="gradcam")
+maps = interpret(model, images, method="chefer", reference=gallery_embedding)
+canvas = overlay(crop_hwc, maps[0])
+```
 
 ### Postprocessing
 
@@ -689,6 +700,8 @@ dataset/        Annotation validation, folds, datasets, data module, pretrain lo
 extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
+interp/         Embedding attribution: Grad-CAM, HiResCAM, LayerCAM, EigenCAM, attention rollout, Chefer
+notebooks/      EDA, OOF analysis (`oof_analysis_eva02.ipynb`), and interpretation (`interp_eva02.ipynb`)
 postproc/       Retrieval expansion, aggregation, and reranking
 scripts/        Dataset audit, fold creation, weight download, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
@@ -701,8 +714,3 @@ eval.py         Checkpoint-driven evaluation and retrieval entrypoint
 ## Current limitations
 
 - Open-set refusal is not implemented; every query currently receives a ranked gallery result.
-- Full production-scale DDP, GPU memory, and throughput behavior must be validated in the target
-  training environment.
-- Transductive postprocessing uses the complete evaluation query/gallery set and must be disabled
-  when that evaluation protocol is not allowed.
-- Foundation-model checkpoints can require substantial disk space and GPU memory.
