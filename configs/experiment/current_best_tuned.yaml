@@ -1,7 +1,8 @@
 # @package _global_
-# Optuna convnext_base_all trial 23 (OOF mAP 0.7587). Recipe knobs only; swap the model group on the CLI.
+# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe (5-fold OOF mAP 0.857).
+# Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
 defaults:
-  - override /model: dinov3_convnext_base
+  - override /model: llm2clip
   - override /loss: arcface_adasp
   - override /optimizer: adamw
 name: current_best_tuned
@@ -10,8 +11,8 @@ data:
   context_jitter_pct: 8.594371961218801
   resize_mode: stretch
   image_size:
-  - 384
-  - 384
+  - 336
+  - 336
   sampler:
     kind: pk
     identities: 16
@@ -52,7 +53,7 @@ model:
     bnneck: true
     dropout: 0.22222483845111796
     retrieval_feature: neck
-    local_parts: 2
+    local_parts: 0
 loss:
   terms:
   - name: arcface
@@ -326,9 +327,7 @@ eval:
     enabled: false
     hflip: true
     scales:
-    - 0.9513606534809561
     - 1.0
-    - 1.0486393465190438
     rotations:
     - -4
     - 0

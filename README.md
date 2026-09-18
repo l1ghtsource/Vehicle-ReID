@@ -286,9 +286,9 @@ Experiment presets provide larger ready-to-run configurations:
 .venv/bin/python train.py experiment=current_best_tuned data.fold=0
 ```
 
-`current_best_tuned` is Optuna study `convnext_base_all` trial 23 (OOF mAP 0.7587): 384 input,
-PK 16×2, ArcFace+AdaSP, linear schedule, EMA. It defaults to DINOv3 ConvNeXt Base; pass `model=` to
-use the same recipe with another backbone.
+`current_best_tuned` is LLM2CLIP EVA02-L-14-336 trained with the Optuna `convnext_base_all` trial 23
+recipe (5-fold OOF mAP 0.857): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP, linear schedule,
+EMA. Pass `model=` to reuse the recipe with another backbone.
 
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
@@ -338,9 +338,8 @@ Set `EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaul
 Direct Hydra remains available:
 
 ```bash
-.venv/bin/python pretrain.py experiment=current_best_tuned model=dinov3_convnext_base pretrain.datasets=[veri]
-.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric] \
-  data.image_size=[336,336] model.head.local_parts=0
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[veri]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric]
 ```
 
 The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
@@ -354,7 +353,7 @@ and data fingerprint, so `train.py` would reject that checkpoint.
 ```bash
 .venv/bin/python train.py \
   experiment=current_best_tuned \
-  init_checkpoint=runs/pretrain/dinov3_convnext_base_veri/<run>/checkpoints/<ckpt>.ckpt \
+  init_checkpoint=runs/pretrain/llm2clip_veri/<run>/checkpoints/<ckpt>.ckpt \
   data.fold=0
 ```
 
