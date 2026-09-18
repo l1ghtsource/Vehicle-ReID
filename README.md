@@ -36,7 +36,7 @@ The default development tests do not require a GPU, network access, or productio
 
 ## Installation
 
-Create the environment and install runtime and development dependencies:
+Create the environment and install runtime, development, and notebook dependencies:
 
 ```bash
 uv sync --extra dev
@@ -293,7 +293,7 @@ Experiment presets provide larger ready-to-run configurations:
 ```
 
 `current_best_tuned` is LLM2CLIP EVA02-L-14-336 trained with the Optuna `convnext_base_all` trial 23
-recipe (5-fold OOF mAP 0.857, mAP@10 0.845): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP,
+recipe (5-fold OOF mAP 0.847, mAP@10 0.834): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP,
 linear schedule, EMA. Pass `model=` to reuse the recipe with another backbone.
 
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
@@ -401,8 +401,8 @@ no score column and no skipped `query_id`.
 
 `eva02_model` and `eva02_ensemble` need a `.cbm` at `refusal.model_path` (default
 `weights/finetuned/eva02_catboost.cbm`). Export it from EVA02 OOF embeddings with
-`scripts/export_refusal.py`. Thresholds in those YAMLs are
-frozen EVA02 nested 5-fold inner-CV operating points, not retuned on the test set. TabM remains a
+`scripts/export_refusal.py`. Thresholds in those YAMLs are frozen EVA02 nested 5-fold inner-CV
+maxima of `0.7 × F1 + 0.3 × TNR`, not retuned on the test set. TabM remains a
 `refusal/` calibration head and is not a submit preset.
 
 Select checkpoint weights with:
@@ -447,16 +447,17 @@ scripts/zero_shot_weights.sh cuda:2
 ```
 
 Measured out-of-the-box retrieval on 100% of competition `train.csv` (1541 queries, 5550 gallery
-images, cross-camera protocol, no TTA or reranking). These scores are a pretrained-backbone probe,
-not identity-disjoint fold OOF. `mAP` is full-gallery average precision; `mAP@10` is the official
-submission metric (top-10, denominator `min(n_pos, 10)`).
+images, cross-camera protocol, no TTA or reranking). Junk is same `vehicle_id` and `camera_id`;
+other identities on the query camera stay in the gallery. These scores are a pretrained-backbone
+probe, not identity-disjoint fold OOF. `mAP` is full-gallery average precision; `mAP@10` is the
+official submission metric (top-10, denominator `min(n_pos, 10)`).
 
 | Model | mAP | mAP@10 | Rank-1 | Rank-5 | Rank-10 | mINP |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| DINOv3 ConvNeXt Base | 0.173 | 0.146 | 0.168 | 0.294 | 0.363 | 0.117 |
-| DINOv3 ConvNeXt Large | 0.189 | 0.158 | 0.175 | 0.323 | 0.412 | 0.136 |
-| RADIO C-RADIOv4-SO400M | 0.171 | 0.145 | 0.176 | 0.295 | 0.360 | 0.112 |
-| LLM2CLIP EVA02-L-14-336 | 0.334 | 0.301 | 0.352 | 0.519 | 0.619 | 0.236 |
+| DINOv3 ConvNeXt Base | 0.168 | 0.141 | 0.162 | 0.286 | 0.356 | 0.114 |
+| DINOv3 ConvNeXt Large | 0.182 | 0.152 | 0.167 | 0.310 | 0.399 | 0.132 |
+| RADIO C-RADIOv4-SO400M | 0.148 | 0.123 | 0.147 | 0.263 | 0.319 | 0.098 |
+| LLM2CLIP EVA02-L-14-336 | 0.301 | 0.268 | 0.313 | 0.471 | 0.580 | 0.212 |
 
 ### Test-time augmentation
 
@@ -592,18 +593,22 @@ The evaluation directory contains:
 - `config.yaml`: resolved evaluation configuration.
 
 Validation reports full-gallery mAP (checkpoint selection and Optuna), official mAP@10 over the
-submission top-10, mINP, and configured CMC ranks. After junk filtering (same-camera gallery
-images), queries with no remaining valid positive are **excluded from the mAP@10 / Rank-1 / Rank-5
-average**, not scored as AP=0. That includes unmarked open-set queries (~20% of the closed test)
-and any query whose only gallery positive was junk. Those queries are scored only through
-`candidates.csv` (F1, TNR), where the correct output is a refusal (no row). Evaluation fails if
-no query has a valid positive.
+submission top-10, mINP, and configured CMC ranks. After junk filtering (same-camera **and**
+same-identity gallery images), queries with no remaining valid positive are **excluded from the
+mAP@10 / Rank-1 / Rank-5 average**, not scored as AP=0. Gallery images of a *different* identity
+on the query camera stay in the ranking. That includes unmarked open-set queries (~20% of the
+closed test) and any query whose only gallery positive was junk. Those queries are scored only
+through `candidates.csv` (F1, TNR), where the correct output is a refusal (no row). Evaluation
+fails if no query has a valid positive.
 
 ### Contest inference profile
 
 Organizer timing is the full `extract()` cycle on one vehicle: disk read, decode, bbox crop,
 preprocessing, forward, postprocessing, L2. Gallery search and re-ranking are excluded — they scale
-with gallery size, not with the embedding model. `profiling/` reproduces that protocol.
+with gallery size, not with the embedding model. `profiling/` reproduces that protocol. When
+`eval.tta.enabled` is true, the timed `extract()` path averages the same views as `eval.py`:
+scales, rotations, flips, and every `eval.tta.context_pcts` crop. The published serving-checkpoint
+numbers use TTA off, so they are unchanged.
 
 - `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
   and after every timed sample.
@@ -652,20 +657,34 @@ F1/TNR.
 
 Contest F1 is query-level: TP only if the query has a gallery match **and** the highest-confidence
 candidate is that identity. Extra candidates below that top row do not change F1 or TNR. Wrong
-top-1 on a closed query is FP, not TP. TNR uses only queries with no gallery match. PR-AUC remains
-a threshold-free ranking of match vs no-match queries.
+top-1 on a closed query is FP, not TP. TNR uses only queries with no gallery match. The contest
+operating-point score is `0.7 × F1 + 0.3 × TNR`. PR-AUC remains a threshold-free ranking of match vs
+no-match queries.
 
-The operating points in `configs/refusal/` are frozen EVA02 nested 5-fold inner-CV maxima of that
-micro F1 (cosine 0.6532, CatBoost 0.4329). They are the team's accept/refuse rule for forming
-`candidates.csv`. Organizers do not re-apply them, and `confidence` is not required to be a
-calibrated probability.
+The operating points in `configs/refusal/` maximize the contest score `0.7 × F1 + 0.3 × TNR` on
+nested 5-fold inner CV (cosine 0.7011, CatBoost 0.6719). They are the team's accept/refuse rule for
+forming `candidates.csv`. Organizers do not re-apply them, and `confidence` is not required to be a
+calibrated probability. Outer-OOF metrics concatenate each fold's accept/refuse mask from that
+fold's inner-CV threshold; they do not re-apply the mean serving threshold to the evaluated queries.
+
+Outer-OOF on the 50/50 pairs (one confusion matrix over concatenated per-fold decisions):
+
+| Head | contest | F1 | TNR | PR-AUC |
+| --- | ---: | ---: | ---: | ---: |
+| Cosine | 0.765 | 0.727 | 0.854 | 0.872 |
+| CatBoost | 0.761 | 0.721 | 0.853 | 0.864 |
+| Rank-mean | 0.772 | 0.733 | 0.861 | 0.879 |
+| Unanimous (3 heads) | 0.755 | 0.702 | 0.879 | 0.763 |
+
+Serving `eva02_ensemble` is the streaming-safe vote of the frozen cosine and CatBoost heads, not the OOF rank-average.
 
 `refusal/` implements three accept/refuse heads on top of frozen retrieval embeddings, plus
 ensembles of those heads. None of them uses `camera_id` or `vehicle_id` as a feature; those labels
 exist only while building the training pairs.
 
 1. **Cosine threshold.** Score is the maximum query-gallery cosine (optionally the top-1/top-2
-   gap). The operating point is maximum F1 on inner-CV scores, never on the reported fold.
+   gap). The operating point maximizes `0.7 × F1 + 0.3 × TNR` on inner-CV scores, never on the
+   reported fold.
 2. **CatBoost.** A binary classifier on the retrieved set. Training examples are balanced 50/50 by
    scoring the same query against the full gallery (`y=1`) and against the gallery with that
    identity removed (`y=0`). Features are similarity statistics, pairwise/graph descriptors of the
@@ -735,7 +754,7 @@ weights/finetuned/
 
 `eva02.pt` is the eval/Docker checkpoint. `eva02_catboost.cbm` is required for
 `refusal=eva02_model` and `refusal=eva02_ensemble` (the Docker default). The accept threshold
-`0.4329` stays in `configs/refusal/`; it is not retuned at export.
+`0.6719` stays in `configs/refusal/`; it is not retuned at export.
 
 Those binaries are Git LFS objects (see `.gitattributes`). After adding or replacing them without
 `--sha256` on the exporter:
@@ -851,14 +870,29 @@ default assignment:
   --n-trials 200
 ```
 
-`hpo/optuna_search_space.py` defines the complete search space. It samples input size and crop
-context, P×K sampling, backbone optimization controls, pooling, head, every supported loss and its
-parameters, optimizer, scheduler, regularization, every augmentation transform and parameter, TTA,
-AQE, gallery aggregation, and reranking. AQE and joint query-batch rerank are sampled for local OOF
-only; contest serving (`postproc.streaming=true`) does not apply them. The selected model architecture, checkpoint, five-fold
-protocol, data paths, fold assignment, worker and loader settings, precision, deterministic mode,
-logging, checkpoint policy, metric protocol, and output paths stay fixed so trials remain
-comparable and operational settings do not consume search trials.
+Research of non-streaming methods uses a different study name:
+
+```bash
+.venv/bin/python -m hpo.run_optuna_search \
+  --model dinov3_convnext_large \
+  --checkpoint weights/dinov3_large/model.safetensors \
+  --gpus 3,4,5,6,7 \
+  --space nonstreaming \
+  --study-name convnext_large_nonstreaming \
+  --n-trials 200
+```
+
+`hpo/optuna_search_space.py` defines two search spaces. `--space contest` is the default and the
+only serving-legal search: it forces `postproc.streaming=true`, never enables AQE, and still samples
+gallery aggregation plus per-query k-reciprocal/GNN rerank. `--space nonstreaming` is a separate
+research mode that forces `postproc.streaming=false` and samples AQE. Contest and nonstreaming
+trials must not share a `--study-name`. Both spaces sample input size and crop context, P×K
+sampling, backbone optimization controls, pooling, head, every supported loss and its parameters,
+optimizer, scheduler, regularization, every augmentation transform and parameter, and TTA. The
+selected model architecture, checkpoint, five-fold protocol, data paths, fold assignment, worker
+and loader settings, precision, deterministic mode, logging, checkpoint policy, metric protocol,
+and output paths stay fixed so trials remain comparable and operational settings do not consume
+search trials.
 
 Pass data or environment-specific Hydra settings with repeatable `--override` flags:
 
@@ -950,8 +984,10 @@ make test
 The default pytest command enforces 100% line coverage over all first-party runtime code. Tests use
 synthetic data and mocks for network, GPU-only, and large-model operations.
 
-Ruff and ty check first-party source and tests. Vendored code under `third_party/` is the only code
-exclusion. Function-local imports are forbidden by Ruff rule `PLC0415`.
+Ruff and ty check first-party source, tests, and notebooks. Vendored code under `third_party/` is
+the only code exclusion. Function-local imports are forbidden by Ruff rule `PLC0415`. The `dev`
+extra includes `matplotlib` and `IPython` so notebook cells type-check and rerun in the same
+environment as `make lint`.
 
 ## Reproducibility and safety
 
@@ -979,7 +1015,7 @@ notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation 
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
 profiling/      Contest extract() timing, weight inventory vs 2 GiB, VRAM, determinism
-refusal/        Open-set accept/refuse: cosine threshold, CatBoost, TabM, eval-time mask, contest F1/TNR/PR-AUC
+refusal/        Open-set accept/refuse: cosine threshold, CatBoost, TabM, eval-time mask, contest 0.7 F1 + 0.3 TNR
 requirements/   Hashed pip freeze used by the contest Docker image
 scripts/        Dataset audit, fold creation, weight download, serving `.pt` / CatBoost export, checksum verification, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests

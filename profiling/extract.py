@@ -1,4 +1,3 @@
-from contextlib import nullcontext
 from io import BytesIO
 from pathlib import Path
 from time import perf_counter
@@ -7,10 +6,9 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.nn import functional as F
-from torchvision.transforms.functional import InterpolationMode, rotate
 
 from dataset.images import crop_bbox
-from models.input_size import scaled_hw, spatial_multiple
+from modules.inference import embed_tensor, tta_context_pcts
 
 from .device import as_device, is_cuda, synchronize
 
@@ -54,59 +52,6 @@ def preprocess_record(image: Image.Image, transform) -> torch.Tensor:
     return transform(np.asarray(image))
 
 
-def _tta_views(tta) -> tuple[list[float], list[float], list[bool]]:
-    if tta is None or not bool(getattr(tta, "enabled", False)):
-        return [1.0], [0.0], [False]
-    scales = [float(value) for value in tta.scales]
-    angles = [float(value) for value in tta.rotations]
-    flips = [False, True] if bool(tta.hflip) else [False]
-    if not scales or not angles or min(scales) <= 0:
-        raise ValueError("TTA scales/rotations must be nonempty and scales positive")
-    return scales, angles, flips
-
-
-def autocast_context(device, precision: str):
-    if precision not in {"fp32", "bf16", "fp16"}:
-        raise ValueError("precision must be fp32/bf16/fp16")
-    if precision == "fp32" or not is_cuda(device):
-        return nullcontext()
-    dtype = torch.bfloat16 if precision == "bf16" else torch.float16
-    return torch.autocast(device_type="cuda", dtype=dtype)
-
-
-def _embedding(output) -> torch.Tensor:
-    return output["embedding"] if isinstance(output, dict) else output
-
-
-def embed_tensor(model, batch: torch.Tensor, device, precision: str = "fp32", tta=None, model_cfg=None):
-    target = as_device(device)
-    scales, angles, flips = _tta_views(tta)
-    backend = str(getattr(model_cfg, "backend", "")) if model_cfg is not None else ""
-    multiple = spatial_multiple(model_cfg) if model_cfg is not None else 1
-    embeddings = []
-    with torch.inference_mode(), autocast_context(target, precision):
-        for scale in scales:
-            native = (int(batch.shape[-2]), int(batch.shape[-1]))
-            size = native if backend == "llm2clip" else scaled_hw(native[0], native[1], scale, multiple)
-            resized = (
-                batch
-                if size == native
-                else F.interpolate(batch, size=size, mode="bilinear", align_corners=False)
-            )
-            for angle in angles:
-                rotated = (
-                    rotate(resized, angle, interpolation=InterpolationMode.BILINEAR) if angle else resized
-                )
-                for flip in flips:
-                    inp = rotated.flip(-1) if flip else rotated
-                    embeddings.append(F.normalize(_embedding(model(inp)).float(), dim=1))
-    stacked = torch.stack(embeddings).mean(0)
-    result = F.normalize(stacked.float(), dim=1)
-    if not torch.isfinite(result).all():
-        raise FloatingPointError("Nonfinite extract embeddings")
-    return result
-
-
 def extract(
     paths,
     bboxes,
@@ -129,7 +74,7 @@ def extract(
         raise ValueError("full_images must match the batch")
     target = as_device(device)
     clock = StageClock(target) if timed else None
-    tensors = []
+    decoded = []
     for (path, bbox), full_image in zip(records, flags, strict=True):
         if clock is not None:
             clock.start()
@@ -139,20 +84,30 @@ def extract(
         image = decode_rgb(payload)
         if clock is not None:
             clock.add("decode")
-        cropped = crop_record(image, bbox, context_pct, full_image=full_image)
+        decoded.append((image, bbox, full_image))
+    views = []
+    for context in tta_context_pcts(tta, context_pct):
+        tensors = []
+        for image, bbox, full_image in decoded:
+            if clock is not None:
+                clock.start()
+            cropped = crop_record(image, bbox, context, full_image=full_image)
+            if clock is not None:
+                clock.add("crop")
+            tensors.append(preprocess_record(cropped, transform))
+            if clock is not None:
+                clock.add("preprocess")
         if clock is not None:
-            clock.add("crop")
-        tensors.append(preprocess_record(cropped, transform))
+            clock.start()
+        batch = torch.stack(tensors).to(target, non_blocking=is_cuda(target))
         if clock is not None:
-            clock.add("preprocess")
+            clock.add("h2d")
+        views.append(embed_tensor(model, batch, target, precision=precision, tta=tta, model_cfg=model_cfg))
+        if clock is not None:
+            clock.add("forward")
     if clock is not None:
         clock.start()
-    batch = torch.stack(tensors).to(target, non_blocking=is_cuda(target))
-    if clock is not None:
-        clock.add("h2d")
-    raw = embed_tensor(model, batch, target, precision=precision, tta=tta, model_cfg=model_cfg)
-    if clock is not None:
-        clock.add("forward")
+    raw = torch.stack(views).mean(0)
     out = F.normalize(raw.float(), dim=1)
     if clock is not None:
         clock.add("l2")

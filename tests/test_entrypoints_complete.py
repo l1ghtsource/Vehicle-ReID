@@ -303,6 +303,45 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert str(effective.refusal.model_path) == "/tmp/refuse.cbm"
 
 
+def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(eval_module, "ReIDModel", LoadedModel)
+    path = tmp_path / "model.ckpt"
+    torch.save(checkpoint_for(cfg), path)
+    stub = OmegaConf.create(
+        {
+            "checkpoint": str(path),
+            "eval": {
+                "split": "val",
+                "device": "cpu",
+                "output_dir": str(tmp_path),
+                "weights": "raw",
+                "top_k": 10,
+                "save_distances": False,
+                "precision": "fp32",
+            },
+        },
+    )
+    model, effective, _, choice = eval_module.load_model(stub, [])
+    assert choice == "raw"
+    assert list(model.loaded[0]) == ["weight"]
+    assert str(effective.refusal.kind) == str(cfg.refusal.kind)
+    assert bool(effective.postproc.streaming) == bool(cfg.postproc.streaming)
+    overlay = eval_module.overlay_eval_config(
+        OmegaConf.create(OmegaConf.to_container(cfg, resolve=True)),
+        stub,
+        [],
+    )
+    assert overlay.eval.split == "val"
+    assert overlay.eval.weights == "raw"
+    assert str(overlay.refusal.kind) == str(cfg.refusal.kind)
+    with_refusal = OmegaConf.merge(stub, {"refusal": {"kind": "none"}})
+    _, refusal_cfg, _, _ = eval_module.load_model(with_refusal, [])
+    assert str(refusal_cfg.refusal.kind) == "none"
+    with_stream = OmegaConf.merge(stub, {"postproc": {"streaming": False}})
+    _, stream_cfg, _, _ = eval_module.load_model(with_stream, [])
+    assert bool(stream_cfg.postproc.streaming) is False
+
+
 def test_refusal_serving_presets():
     config_dir = str(Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base="1.3", config_dir=config_dir):
@@ -313,13 +352,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6532)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7011)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.4329)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.6719)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6532)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.4329)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7011)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.6719)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 

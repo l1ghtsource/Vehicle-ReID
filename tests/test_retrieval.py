@@ -16,6 +16,23 @@ def test_metrics_known_answer_and_camera_exclusion():
     assert m["Rank-5"] == 1.0
 
 
+def test_same_camera_other_identity_stays_in_gallery():
+    distance = np.array([[0.0, 0.1]])
+    inflated = retrieval_metrics(
+        distance,
+        [1],
+        [2, 1],
+        [0],
+        [0, 1],
+        exclude_all_same_camera=True,
+    )
+    official = retrieval_metrics(distance, [1], [2, 1], [0], [0, 1])
+    assert inflated["mAP@10"] == 1.0
+    assert inflated["Rank-1"] == 1.0
+    assert official["mAP@10"] == 0.5
+    assert official["Rank-1"] == 0.0
+
+
 def test_no_positive_is_reported_not_scored_as_perfect():
     m = retrieval_metrics(np.array([[0.1], [0.2]]), [1, 99], [1], cross_camera=False)
     assert m["evaluated_queries"] == 1 and m["queries_without_positive"] == 1

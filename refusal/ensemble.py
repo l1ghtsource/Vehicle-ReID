@@ -1,6 +1,6 @@
 import numpy as np
 
-from .metrics import select_threshold
+from .metrics import _rule_key, select_threshold
 
 
 def score_matrix(scores):
@@ -48,7 +48,7 @@ def vote_fraction(scores, thresholds):
     return (matrix >= t).mean(axis=1)
 
 
-def fit_rank_weights(y, scores, top_correct, grid=4):
+def fit_rank_weights(y, scores, top_correct, grid=4, kind="contest"):
     matrix = score_matrix(scores)
     y = np.asarray(y, dtype=int).reshape(-1)
     top = np.asarray(top_correct, dtype=bool).reshape(-1)
@@ -66,8 +66,8 @@ def fit_rank_weights(y, scores, top_correct, grid=4):
         w = axis[idx]
         if float(w.sum()) > 0:
             blended = rank_average([matrix[:, j] for j in range(n)], weights=w)
-            picked = select_threshold(y, blended, top, kind="max_f1")
-            key = (picked["f1"], picked["tnr"], -picked["threshold"])
+            picked = select_threshold(y, blended, top, kind=kind)
+            key = _rule_key(kind)(picked)
             if best_key is None or key > best_key:
                 best_key = key
                 best_w = w / w.sum()

@@ -9,7 +9,7 @@ def retrieval_metrics(
     gcams=None,
     ranks=(1, 5, 10),
     cross_camera=True,
-    exclude_all_same_camera=True,
+    exclude_all_same_camera=False,
 ):
     d = np.asarray(distance)
     qids, gids = np.asarray(qids), np.asarray(gids)

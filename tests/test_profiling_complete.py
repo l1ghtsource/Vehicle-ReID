@@ -1,4 +1,3 @@
-import importlib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,6 +9,7 @@ from PIL import Image
 from torch import nn
 from torch.nn import functional as F
 
+from modules.inference import autocast_context, tta_context_pcts
 from profiling import (
     CONTEST_SUFFIXES,
     EXTRA_SUFFIXES,
@@ -49,10 +49,8 @@ from profiling import (
     timed,
 )
 from profiling import device as device_mod
-from profiling.extract import autocast_context, crop_record, extract, preprocess_record
+from profiling.extract import crop_record, extract, preprocess_record
 from profiling.weights import is_contest_weight, is_extra_weight, iter_files
-
-extract_mod = importlib.import_module("profiling.extract")
 
 
 class DummyReID(nn.Module):
@@ -220,6 +218,80 @@ def test_extract_stages_and_guards(tmp_path):
     assert gray.shape == (1, 8)
 
 
+class CountingReID(DummyReID):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.calls = 0
+
+    def forward(self, x):
+        self.calls += 1
+        return super().forward(x)
+
+
+def identity_tta(**kwargs):
+    values = {"enabled": True, "scales": [1.0], "rotations": [0], "hflip": False, "context_pcts": None}
+    values.update(kwargs)
+    return SimpleNamespace(**values)
+
+
+def test_extract_context_tta_matches_eval_forwards(tmp_path):
+    paths, bboxes = records(tmp_path, 1)
+    model = CountingReID()
+    model.eval()
+    extract(
+        paths,
+        bboxes,
+        tiny_transform,
+        model,
+        "cpu",
+        context_pct=0.0,
+        tta=identity_tta(context_pcts=[0, 50]),
+    )
+    assert model.calls == 2
+    assert tta_context_pcts(identity_tta(context_pcts=[0, 50]), 10.0) == [0.0, 50.0]
+    model.calls = 0
+    extract(
+        paths,
+        bboxes,
+        tiny_transform,
+        model,
+        "cpu",
+        context_pct=5.0,
+        tta=identity_tta(enabled=False, context_pcts=[0, 50]),
+    )
+    assert model.calls == 1
+    model.calls = 0
+    extract(paths, bboxes, tiny_transform, model, "cpu", context_pct=5.0, tta=identity_tta())
+    assert model.calls == 1
+    model.calls = 0
+    extract(
+        paths,
+        bboxes,
+        tiny_transform,
+        model,
+        "cpu",
+        context_pct=5.0,
+        tta=identity_tta(context_pcts=[]),
+    )
+    assert model.calls == 1
+    shared = CountingReID()
+    shared.eval()
+    a = extract(paths, bboxes, tiny_transform, shared, "cpu", context_pct=0.0)
+    b = extract(paths, bboxes, tiny_transform, shared, "cpu", context_pct=50.0)
+    both = extract(
+        paths,
+        bboxes,
+        tiny_transform,
+        shared,
+        "cpu",
+        context_pct=99.0,
+        tta=identity_tta(context_pcts=[0, 50]),
+    )
+    mean = (a + b) / 2
+    mean /= np.linalg.norm(mean, axis=1, keepdims=True)
+    assert np.allclose(both, mean, atol=1e-5)
+
+
 def test_embed_tta_and_amp(monkeypatch):
     model = DummyReID()
     model.eval()
@@ -273,7 +345,6 @@ def test_embed_tta_and_amp(monkeypatch):
         seen.append(kwargs["dtype"])
         return DummyCtx()
 
-    monkeypatch.setattr(extract_mod, "is_cuda", lambda device: True)
     monkeypatch.setattr(torch, "autocast", fake_autocast)
     with autocast_context("cuda", "bf16"):
         pass

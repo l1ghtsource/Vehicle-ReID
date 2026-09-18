@@ -100,10 +100,12 @@ class FeatureHook:
     def __init__(self, model):
         self.model = model
         self.feature = None
+        self.levels = []
         self.handle = None
 
     def _keep(self, _module, _inputs, output):
-        self.feature = output[-1] if isinstance(output, (list, tuple)) else output
+        self.levels = list(output) if isinstance(output, (list, tuple)) else [output]
+        self.feature = self.levels[-1] if self.levels else None
 
     def __enter__(self):
         self.handle = self.model.backbone.register_forward_hook(self._keep)

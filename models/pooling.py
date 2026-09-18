@@ -8,12 +8,15 @@ class Pool(nn.Module):
         self.kind = cfg.kind
         self.prefix = int(num_prefix_tokens)
         self.p = nn.Parameter(torch.tensor(float(cfg.p)), requires_grad=bool(cfg.trainable))
-        if self.kind == "attn":
-            self.attention = nn.Sequential(
-                nn.Linear(channels, cfg.attention_hidden), nn.Tanh(), nn.Linear(cfg.attention_hidden, 1)
-            )
         if self.kind not in {"gap", "gem", "signed_gem", "max", "avgmax", "attn", "cls"}:
             raise ValueError(f"Unknown pooling {self.kind}")
+        self.attention: nn.Module = (
+            nn.Sequential(
+                nn.Linear(channels, cfg.attention_hidden), nn.Tanh(), nn.Linear(cfg.attention_hidden, 1)
+            )
+            if self.kind == "attn"
+            else nn.Identity()
+        )
         self.out_dim: int = channels * (2 if self.kind == "avgmax" else 1)
 
     def forward(self, x):

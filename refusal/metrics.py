@@ -1,6 +1,13 @@
 import numpy as np
 from sklearn.metrics import average_precision_score, roc_auc_score
 
+CONTEST_F1_WEIGHT = 0.7
+CONTEST_TNR_WEIGHT = 0.3
+
+
+def contest_score(f1, tnr):
+    return CONTEST_F1_WEIGHT * float(f1) + CONTEST_TNR_WEIGHT * float(tnr)
+
 
 def decide(scores, threshold):
     scores = np.asarray(scores, dtype=np.float64).reshape(-1)
@@ -16,9 +23,7 @@ def _aligned(y_has_match, scores, top_correct):
     return y, scores, top & y
 
 
-def candidate_metrics(y_has_match, scores, threshold, top_correct):
-    y, scores, top_ok = _aligned(y_has_match, scores, top_correct)
-    accept = decide(scores, threshold)
+def _confusion(y, accept, top_ok):
     tp = int((accept & top_ok).sum())
     fp = int((accept & ~top_ok).sum())
     tn = int((~accept & ~y).sum())
@@ -30,11 +35,11 @@ def candidate_metrics(y_has_match, scores, threshold, top_correct):
     tnr = tn / max(tn + fp_open, 1)
     f1 = 0.0 if precision + recall == 0 else 2 * precision * recall / (precision + recall)
     return {
-        "threshold": float(threshold),
         "f1": float(f1),
         "precision": float(precision),
         "recall": float(recall),
         "tnr": float(tnr),
+        "contest": contest_score(f1, tnr),
         "tp": tp,
         "fp": fp,
         "tn": tn,
@@ -46,6 +51,22 @@ def candidate_metrics(y_has_match, scores, threshold, top_correct):
         "n_closed": int(y.sum()),
         "n_top_hit": int(top_ok.sum()),
     }
+
+
+def decision_metrics(y_has_match, accept, top_correct):
+    y = np.asarray(y_has_match, dtype=bool).reshape(-1)
+    accept = np.asarray(accept, dtype=bool).reshape(-1)
+    top = np.asarray(top_correct, dtype=bool).reshape(-1)
+    if y.size < 1 or y.shape != accept.shape or y.shape != top.shape:
+        raise ValueError("y_has_match, accept, and top_correct must be nonempty and aligned")
+    return _confusion(y, accept, top & y)
+
+
+def candidate_metrics(y_has_match, scores, threshold, top_correct):
+    y, scores, top_ok = _aligned(y_has_match, scores, top_correct)
+    row = _confusion(y, decide(scores, threshold), top_ok)
+    row["threshold"] = float(threshold)
+    return row
 
 
 def ranking_metrics(y_has_match, scores):
@@ -72,16 +93,20 @@ def sweep_thresholds(y_has_match, scores, top_correct, thresholds=None):
     return [candidate_metrics(y_has_match, scores, t, top_correct) for t in values]
 
 
-def select_threshold(y_has_match, scores, top_correct, kind="max_f1", min_tnr=0.0):
-    rows = sweep_thresholds(y_has_match, scores, top_correct)
+def _rule_key(kind):
     if kind == "max_f1":
-        feasible = [row for row in rows if row["tnr"] + 1e-12 >= min_tnr]
-        pool = feasible if feasible else rows
-        best = max(pool, key=lambda row: (row["f1"], row["tnr"], -row["threshold"]))
-    elif kind == "youden":
-        best = max(rows, key=lambda row: (row["recall"] + row["tnr"], row["f1"]))
-    elif kind == "f1_tnr":
-        best = max(rows, key=lambda row: (row["f1"] * row["tnr"], row["f1"]))
-    else:
-        raise ValueError(f"Unknown threshold rule {kind}")
-    return best
+        return lambda row: (row["f1"], row["tnr"], -row["threshold"])
+    if kind == "youden":
+        return lambda row: (row["recall"] + row["tnr"], row["f1"], -row["threshold"])
+    if kind == "f1_tnr":
+        return lambda row: (row["f1"] * row["tnr"], row["f1"], -row["threshold"])
+    if kind == "contest":
+        return lambda row: (row["contest"], row["f1"], row["tnr"], -row["threshold"])
+    raise ValueError(f"Unknown threshold rule {kind}")
+
+
+def select_threshold(y_has_match, scores, top_correct, kind="contest", min_tnr=0.0):
+    rows = sweep_thresholds(y_has_match, scores, top_correct)
+    feasible = [row for row in rows if row["tnr"] + 1e-12 >= min_tnr]
+    pool = feasible if feasible else rows
+    return max(pool, key=_rule_key(kind))

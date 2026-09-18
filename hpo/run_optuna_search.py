@@ -16,7 +16,12 @@ import pandas as pd
 from optuna.samplers import TPESampler
 from optuna.trial import TrialState
 
-from hpo.optuna_search_space import params_from_config, suggest_overrides
+from hpo.optuna_search_space import (
+    CONTEST_SPACE,
+    NONSTREAMING_SPACE,
+    params_from_config,
+    suggest_overrides,
+)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOGGER = logging.getLogger("reid_optuna")
@@ -164,10 +169,11 @@ def run_trial(
     root: Path,
     metric: str,
     base_overrides: list[str],
+    space: str = CONTEST_SPACE,
 ) -> float:
     trial_dir = root / f"trial_{trial.number:05d}"
     trial_dir.mkdir(parents=True, exist_ok=True)
-    sampled = suggest_overrides(trial, model)
+    sampled = suggest_overrides(trial, model, space)
     fixed = [
         f"model={model}",
         "model.local_files_only=true",
@@ -186,7 +192,7 @@ def run_trial(
         "data.verify_files=true",
         "data.validation.query_per_identity=1",
         "data.validation.cross_camera=true",
-        "data.validation.exclude_all_same_camera=true",
+        "data.validation.exclude_all_same_camera=false",
         "data.validation.ranks=[1,5,10]",
         "trainer.accelerator=gpu",
         "trainer.devices=1",
@@ -212,7 +218,12 @@ def run_trial(
         "postproc.max_dense_gb=4.0",
         "postproc.rerank.device=cpu",
     ]
-    overrides = [*base_overrides, *fixed, *sampled]
+    space_fixed = (
+        ["postproc.streaming=true", "postproc.aqe.enabled=false"]
+        if space == CONTEST_SPACE
+        else ["postproc.streaming=false"]
+    )
+    overrides = [*base_overrides, *fixed, *sampled, *space_fixed]
     (trial_dir / "params.json").write_text(json.dumps(trial.params, indent=2))
     (trial_dir / "overrides.json").write_text(json.dumps(overrides, indent=2))
 
@@ -344,6 +355,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--log", type=Path)
     parser.add_argument("--seed-run", type=Path)
     parser.add_argument("--override", action="append", default=[])
+    parser.add_argument("--space", choices=[CONTEST_SPACE, NONSTREAMING_SPACE], default=CONTEST_SPACE)
     return parser.parse_args()
 
 
@@ -374,10 +386,14 @@ def main() -> None:
         sampler=TPESampler(seed=args.seed, multivariate=True),
         load_if_exists=True,
     )
+    recorded_space = study.user_attrs.get("space")
+    if recorded_space is not None and recorded_space != args.space:
+        raise SystemExit(f"Study {args.study_name} is locked to space {recorded_space}; got {args.space}")
+    study.set_user_attr("space", args.space)
     if not study.trials and args.seed_run is not None:
         seed_run = args.seed_run.resolve()
         seed_config = seed_run / "fold0" / "config.yaml"
-        seed_params = params_from_config(seed_config, args.model)
+        seed_params = params_from_config(seed_config, args.model, args.space)
         score = seed_run_score(seed_run, args.metric)
         study.enqueue_trial(
             seed_params,
@@ -391,8 +407,9 @@ def main() -> None:
     done = finished_count(study)
     remaining = max(0, args.n_trials - done)
     LOGGER.info(
-        "study=%s model=%s finished=%s remaining=%s stale=%s",
+        "study=%s space=%s model=%s finished=%s remaining=%s stale=%s",
         args.study_name,
+        args.space,
         args.model,
         done,
         remaining,
@@ -406,7 +423,7 @@ def main() -> None:
         try:
             seed_run = trial.user_attrs.get("seed_run")
             if seed_run is not None:
-                suggest_overrides(trial, args.model)
+                suggest_overrides(trial, args.model, args.space)
                 trial.set_user_attr("trial_dir", str(seed_run))
                 return float(trial.user_attrs["seed_value"])
             return run_trial(
@@ -417,6 +434,7 @@ def main() -> None:
                 root,
                 args.metric,
                 args.override,
+                args.space,
             )
         except Exception as error:
             trial.set_user_attr("prune_reason", repr(error))

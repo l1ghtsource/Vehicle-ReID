@@ -36,7 +36,14 @@ dependencies = [
     "optuna-dashboard==0.21.0",
 ]
 [project.optional-dependencies]
-dev = ["pytest==8.4.2", "pytest-cov==7.1.0", "ruff==0.15.7", "ty==0.0.81"]
+dev = [
+    "pytest==8.4.2",
+    "pytest-cov==7.1.0",
+    "ruff==0.15.7",
+    "ty==0.0.81",
+    "matplotlib==3.11.2",
+    "ipython==9.5.0",
+]
 [tool.setuptools.packages.find]
 include = [
     "models*",

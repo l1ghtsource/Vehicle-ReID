@@ -3,6 +3,8 @@ import pytest
 import torch
 
 from refusal import (
+    CONTEST_F1_WEIGHT,
+    CONTEST_TNR_WEIGHT,
     STAT_NAMES,
     RefusalTabM,
     balanced_pack,
@@ -10,6 +12,8 @@ from refusal import (
     batch_examples,
     candidate_frame,
     candidate_metrics,
+    contest_score,
+    decision_metrics,
     example_vector,
     feature_names,
     fit_boosting,
@@ -147,6 +151,7 @@ def test_metrics_threshold_rules_and_baselines():
     assert hit["tp"] == 2 and hit["fn"] == 1 and hit["tn"] == 2 and hit["fp"] == 1
     assert hit["fp_open"] == 1 and hit["fp_closed"] == 0
     assert 0 < hit["f1"] < 1 and 0 < hit["tnr"] < 1
+    assert hit["contest"] == pytest.approx(contest_score(hit["f1"], hit["tnr"]))
     wrong = np.array([1, 0, 1, 0, 0, 0])
     mixed = candidate_metrics(y, scores, 0.5, wrong)
     assert mixed["tp"] == 1 and mixed["fp"] == 2 and mixed["fp_closed"] == 1
@@ -164,10 +169,13 @@ def test_metrics_threshold_rules_and_baselines():
     f1 = select_threshold(y, scores, top, kind="max_f1")
     youden = select_threshold(y, scores, top, kind="youden")
     mixed_rule = select_threshold(y, scores, top, kind="f1_tnr")
+    contest = select_threshold(y, scores, top)
     constrained = select_threshold(y, scores, top, kind="max_f1", min_tnr=0.9)
     infeasible = select_threshold(y, scores, top, kind="max_f1", min_tnr=1.1)
     assert f1["f1"] >= youden["f1"] or youden["tnr"] >= f1["tnr"]
     assert mixed_rule["threshold"] >= 0
+    assert contest["contest"] >= f1["contest"] or contest["tnr"] >= f1["tnr"]
+    assert contest["contest"] == pytest.approx(contest_score(contest["f1"], contest["tnr"]))
     assert constrained["tnr"] >= 0.5
     assert infeasible["f1"] >= 0
     custom = sweep_thresholds(y, scores, top, thresholds=[0.0, 0.5, 1.0])
@@ -188,6 +196,50 @@ def test_metrics_threshold_rules_and_baselines():
         ranking_metrics(y, scores[:1])
     with pytest.raises(ValueError, match="empty"):
         ranking_metrics([], [])
+    with pytest.raises(ValueError, match="aligned"):
+        decision_metrics(y, np.ones(2, dtype=bool), top)
+    with pytest.raises(ValueError, match="aligned"):
+        decision_metrics([], [], [])
+
+
+def test_contest_objective_beats_max_f1_on_open_set_tradeoff():
+    y = np.array([1, 1, 1, 1, 1, 1, 1, 1, 0, 0])
+    top = np.array([1, 1, 1, 1, 1, 1, 1, 1, 0, 0], dtype=bool)
+    scores = np.array([0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.95, 0.5, 0.95, 0.5])
+    low = candidate_metrics(y, scores, 0.4, top)
+    high = candidate_metrics(y, scores, 0.9, top)
+    assert low["tnr"] == 0
+    assert low["f1"] == pytest.approx(8 / 9)
+    assert low["contest"] == pytest.approx(0.7 * 8 / 9)
+    assert high["f1"] == pytest.approx(0.875)
+    assert high["tnr"] == pytest.approx(0.5)
+    assert high["contest"] == pytest.approx(0.7625)
+    assert contest_score(1.0, 0.0) == pytest.approx(CONTEST_F1_WEIGHT)
+    assert contest_score(0.0, 1.0) == pytest.approx(CONTEST_TNR_WEIGHT)
+    assert high["contest"] > low["contest"]
+    f1 = select_threshold(y, scores, top, kind="max_f1")
+    contest = select_threshold(y, scores, top, kind="contest")
+    assert f1["tnr"] == 0
+    assert contest["tnr"] == pytest.approx(0.5)
+    assert contest["contest"] == pytest.approx(0.7625)
+    assert contest["threshold"] == pytest.approx(0.95)
+
+
+def test_pooled_oof_uses_per_fold_inner_thresholds():
+    y = np.array([1, 0, 1, 0])
+    top = np.array([1, 0, 1, 0], dtype=bool)
+    scores = np.array([0.9, 0.1, 0.4, 0.3])
+    accept = np.concatenate(
+        [
+            decide(scores[:2], 0.5),
+            decide(scores[2:], 0.35),
+        ]
+    )
+    honest = decision_metrics(y, accept, top)
+    leaked = candidate_metrics(y, scores, 0.425, top)
+    assert honest["fn"] == 0 and honest["fp"] == 0
+    assert leaked["fn"] == 1
+    assert honest["contest"] > leaked["contest"]
 
 
 def test_simple_scores_boosting_and_tabm(tmp_path):
@@ -281,6 +333,8 @@ def test_rank_ensemble_and_votes():
     assert votes[0] == 1.0 and 0 <= votes.min() <= votes.max() <= 1
     w, picked = fit_rank_weights(y, [a, b, c], y.astype(bool), grid=3)
     assert w.shape == (3,) and abs(w.sum() - 1) < 1e-12 and picked["f1"] > 0
+    w_f1, picked_f1 = fit_rank_weights(y, [a, b, c], y.astype(bool), grid=3, kind="max_f1")
+    assert w_f1.shape == (3,) and picked_f1["f1"] > 0
     assert rank_scores(np.array([0.3]))[0] == 0.5
     with pytest.raises(ValueError, match="two score"):
         rank_average([a])

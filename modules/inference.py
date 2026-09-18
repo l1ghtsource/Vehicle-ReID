@@ -7,41 +7,79 @@ from torchvision.transforms.functional import InterpolationMode, rotate
 from models.input_size import scaled_hw, spatial_multiple
 
 
+def tta_views(tta) -> tuple[list[float], list[float], list[bool]]:
+    if tta is None or not bool(getattr(tta, "enabled", False)):
+        return [1.0], [0.0], [False]
+    scales = [float(value) for value in tta.scales]
+    angles = [float(value) for value in tta.rotations]
+    flips = [False, True] if bool(tta.hflip) else [False]
+    if not scales or not angles or min(scales) <= 0:
+        raise ValueError("TTA scales/rotations must be nonempty and scales positive")
+    return scales, angles, flips
+
+
+def tta_context_pcts(tta, default_context: float) -> list[float]:
+    if tta is None or not bool(getattr(tta, "enabled", False)):
+        return [float(default_context)]
+    contexts = getattr(tta, "context_pcts", None)
+    if not contexts:
+        return [float(default_context)]
+    return [float(value) for value in contexts]
+
+
+def autocast_context(device, precision: str):
+    if precision not in {"fp32", "bf16", "fp16"}:
+        raise ValueError("precision must be fp32/bf16/fp16")
+    if precision == "fp32" or not str(device).startswith("cuda"):
+        return nullcontext()
+    dtype = torch.bfloat16 if precision == "bf16" else torch.float16
+    return torch.autocast(device_type="cuda", dtype=dtype)
+
+
+def _embedding(output) -> torch.Tensor:
+    return output["embedding"] if isinstance(output, dict) else output
+
+
+def embed_tensor(model, batch: torch.Tensor, device, precision: str = "fp32", tta=None, model_cfg=None):
+    scales, angles, flips = tta_views(tta)
+    backend = str(getattr(model_cfg, "backend", "")) if model_cfg is not None else ""
+    multiple = spatial_multiple(model_cfg) if model_cfg is not None else 1
+    embeddings = []
+    with torch.inference_mode(), autocast_context(device, precision):
+        for scale in scales:
+            native = (int(batch.shape[-2]), int(batch.shape[-1]))
+            size = native if backend == "llm2clip" else scaled_hw(native[0], native[1], scale, multiple)
+            resized = (
+                batch
+                if size == native
+                else F.interpolate(batch, size=size, mode="bilinear", align_corners=False)
+            )
+            for angle in angles:
+                rotated = (
+                    rotate(resized, angle, interpolation=InterpolationMode.BILINEAR) if angle else resized
+                )
+                for flip in flips:
+                    inp = rotated.flip(-1) if flip else rotated
+                    embeddings.append(F.normalize(_embedding(model(inp)).float(), dim=1))
+    stacked = torch.stack(embeddings).mean(0)
+    result = F.normalize(stacked.float(), dim=1)
+    if not torch.isfinite(result).all():
+        raise FloatingPointError("Nonfinite inference embeddings")
+    return result
+
+
 @torch.inference_mode()
 def embed_loader(model, loader, cfg, device):
     model.eval()
     outputs = []
-    use_amp = cfg.eval.precision in {"bf16", "fp16"} and str(device).startswith("cuda")
-    dtype = torch.bfloat16 if cfg.eval.precision == "bf16" else torch.float16
+    precision = str(cfg.eval.precision)
     tta = cfg.eval.tta
-    scales = list(tta.scales) if tta.enabled else [1.0]
-    angles = list(tta.rotations) if tta.enabled else [0]
-    flips = [False, True] if tta.enabled and tta.hflip else [False]
-    if not scales or not angles or min(scales) <= 0:
-        raise ValueError("TTA scales/rotations must be nonempty and scales positive")
-    multiple = spatial_multiple(cfg.model)
+    model_cfg = cfg.model
     for batch in loader:
-        x = batch["image"].to(device, non_blocking=True)
-        embeddings = []
-        for scale in scales:
-            native = (int(x.shape[-2]), int(x.shape[-1]))
-            if str(cfg.model.backend) == "llm2clip":
-                size = native
-            else:
-                size = scaled_hw(native[0], native[1], float(scale), multiple)
-            z = x if size == native else F.interpolate(x, size=size, mode="bilinear", align_corners=False)
-            for angle in angles:
-                zr = rotate(z, angle, interpolation=InterpolationMode.BILINEAR) if angle else z
-                for flip in flips:
-                    inp = zr.flip(-1) if flip else zr
-                    with torch.autocast(device_type="cuda", dtype=dtype) if use_amp else nullcontext():
-                        out = model(inp)
-                        emb = out["embedding"] if isinstance(out, dict) else out
-                    embeddings.append(F.normalize(emb.float(), dim=1))
-        outputs.append(F.normalize(torch.stack(embeddings).mean(0), dim=1).cpu())
+        image = batch["image"].to(device, non_blocking=True)
+        outputs.append(
+            embed_tensor(model, image, device, precision=precision, tta=tta, model_cfg=model_cfg).cpu()
+        )
     if not outputs:
         raise ValueError("Empty inference dataset")
-    result = torch.cat(outputs)
-    if not torch.isfinite(result).all():
-        raise FloatingPointError("Nonfinite inference embeddings")
-    return result.numpy()
+    return torch.cat(outputs).numpy()

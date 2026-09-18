@@ -3,12 +3,24 @@ from .candidates import candidate_frame, write_candidates
 from .ensemble import fit_rank_weights, rank_average, vote_fraction
 from .features import STAT_NAMES, batch_examples, example_vector, feature_names, similarities, stat_vector
 from .infer import refusal_accept
-from .metrics import candidate_metrics, ranking_metrics, select_threshold, sweep_thresholds
+from .metrics import (
+    CONTEST_F1_WEIGHT,
+    CONTEST_TNR_WEIGHT,
+    candidate_metrics,
+    contest_score,
+    decide,
+    decision_metrics,
+    ranking_metrics,
+    select_threshold,
+    sweep_thresholds,
+)
 from .protocol import balanced_pack, balanced_pairs, has_match, mask_gallery, open_set_split, top_hit
 from .tabm import RefusalTabM, fit_tabm, predict_tabm
 from .threshold import gap12, max_cosine
 
 __all__ = [
+    "CONTEST_F1_WEIGHT",
+    "CONTEST_TNR_WEIGHT",
     "STAT_NAMES",
     "RefusalTabM",
     "balanced_pack",
@@ -16,6 +28,9 @@ __all__ = [
     "batch_examples",
     "candidate_frame",
     "candidate_metrics",
+    "contest_score",
+    "decide",
+    "decision_metrics",
     "example_vector",
     "feature_names",
     "fit_boosting",

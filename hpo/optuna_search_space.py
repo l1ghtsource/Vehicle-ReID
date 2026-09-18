@@ -5,6 +5,28 @@ from typing import Any
 import optuna
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
+CONTEST_SPACE = "contest"
+NONSTREAMING_SPACE = "nonstreaming"
+HPO_SPACES = (CONTEST_SPACE, NONSTREAMING_SPACE)
+AQE_PARAM_NAMES = (
+    "postproc.aqe.enabled",
+    "postproc.aqe.k",
+    "postproc.aqe.alpha",
+    "postproc.aqe.iterations",
+    "postproc.aqe.gallery_only",
+)
+STREAMING_SAFE_POSTPROC_NAMES = (
+    "postproc.enabled",
+    "postproc.gallery_aggregation.enabled",
+    "postproc.gallery_aggregation.k",
+    "postproc.gallery_aggregation.alpha",
+    "postproc.gallery_aggregation.min_similarity",
+    "postproc.rerank.kind",
+    "postproc.rerank.k1",
+    "postproc.rerank.k2",
+    "postproc.rerank.lambda_value",
+)
+
 LOSS_PRESETS = [
     "combined",
     "arcface",
@@ -310,7 +332,69 @@ def _loss_param(loss_name: str, path: str) -> str:
     return f"{loss_name}/{path}"
 
 
-def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
+def _require_space(space: str) -> str:
+    if space not in HPO_SPACES:
+        raise ValueError(f"Unknown HPO space {space}")
+    return space
+
+
+def _append_postproc(trial: optuna.Trial, overrides: list[str], space: str) -> None:
+    streaming = space == CONTEST_SPACE
+    _append(overrides, "postproc.streaming", streaming)
+    _append(overrides, "postproc.enabled", trial.suggest_categorical("postproc.enabled", [False, True]))
+    if space == NONSTREAMING_SPACE:
+        _append(
+            overrides,
+            "postproc.aqe.enabled",
+            trial.suggest_categorical("postproc.aqe.enabled", [False, True]),
+        )
+        _append(overrides, "postproc.aqe.k", trial.suggest_int("postproc.aqe.k", 1, 20))
+        _append(overrides, "postproc.aqe.alpha", trial.suggest_float("postproc.aqe.alpha", 0.0, 5.0))
+        _append(overrides, "postproc.aqe.iterations", trial.suggest_int("postproc.aqe.iterations", 1, 3))
+        _append(
+            overrides,
+            "postproc.aqe.gallery_only",
+            trial.suggest_categorical("postproc.aqe.gallery_only", [False, True]),
+        )
+    else:
+        _append(overrides, "postproc.aqe.enabled", False)
+    _append(
+        overrides,
+        "postproc.gallery_aggregation.enabled",
+        trial.suggest_categorical("postproc.gallery_aggregation.enabled", [False, True]),
+    )
+    _append(
+        overrides,
+        "postproc.gallery_aggregation.k",
+        trial.suggest_int("postproc.gallery_aggregation.k", 1, 20),
+    )
+    _append(
+        overrides,
+        "postproc.gallery_aggregation.alpha",
+        trial.suggest_float("postproc.gallery_aggregation.alpha", 0.0, 1.0),
+    )
+    _append(
+        overrides,
+        "postproc.gallery_aggregation.min_similarity",
+        trial.suggest_float("postproc.gallery_aggregation.min_similarity", 0.5, 0.99),
+    )
+    _append(
+        overrides,
+        "postproc.rerank.kind",
+        trial.suggest_categorical("postproc.rerank.kind", ["none", "k_reciprocal", "gnn"]),
+    )
+    _append(overrides, "postproc.rerank.k1", trial.suggest_int("postproc.rerank.k1", 5, 50))
+    _append(overrides, "postproc.rerank.k2", trial.suggest_int("postproc.rerank.k2", 1, 20))
+    _append(
+        overrides,
+        "postproc.rerank.lambda_value",
+        trial.suggest_float("postproc.rerank.lambda_value", 0.0, 1.0),
+    )
+    _append(overrides, "postproc.rerank.device", "cpu")
+
+
+def suggest_overrides(trial: optuna.Trial, model: str, space: str = CONTEST_SPACE) -> list[str]:
+    space = _require_space(space)
     overrides = []
     for path, spec in BASE_SPECS.items():
         _append(overrides, path, _sample(trial, path, spec))
@@ -480,62 +564,7 @@ def suggest_overrides(trial: optuna.Trial, model: str) -> list[str]:
     if ema_enabled:
         eval_weights = trial.suggest_categorical("eval.weights", ["raw", "ema"])
     _append(overrides, "eval.weights", eval_weights)
-    postproc_enabled = trial.suggest_categorical("postproc.enabled", [False, True])
-    _append(overrides, "postproc.enabled", postproc_enabled)
-    _append(
-        overrides,
-        "postproc.aqe.enabled",
-        trial.suggest_categorical("postproc.aqe.enabled", [False, True]),
-    )
-    _append(overrides, "postproc.aqe.k", trial.suggest_int("postproc.aqe.k", 1, 20))
-    _append(
-        overrides,
-        "postproc.aqe.alpha",
-        trial.suggest_float("postproc.aqe.alpha", 0.0, 5.0),
-    )
-    _append(
-        overrides,
-        "postproc.aqe.iterations",
-        trial.suggest_int("postproc.aqe.iterations", 1, 3),
-    )
-    _append(
-        overrides,
-        "postproc.aqe.gallery_only",
-        trial.suggest_categorical("postproc.aqe.gallery_only", [False, True]),
-    )
-    _append(
-        overrides,
-        "postproc.gallery_aggregation.enabled",
-        trial.suggest_categorical("postproc.gallery_aggregation.enabled", [False, True]),
-    )
-    _append(
-        overrides,
-        "postproc.gallery_aggregation.k",
-        trial.suggest_int("postproc.gallery_aggregation.k", 1, 20),
-    )
-    _append(
-        overrides,
-        "postproc.gallery_aggregation.alpha",
-        trial.suggest_float("postproc.gallery_aggregation.alpha", 0.0, 1.0),
-    )
-    _append(
-        overrides,
-        "postproc.gallery_aggregation.min_similarity",
-        trial.suggest_float("postproc.gallery_aggregation.min_similarity", 0.5, 0.99),
-    )
-    _append(
-        overrides,
-        "postproc.rerank.kind",
-        trial.suggest_categorical("postproc.rerank.kind", ["none", "k_reciprocal", "gnn"]),
-    )
-    _append(overrides, "postproc.rerank.k1", trial.suggest_int("postproc.rerank.k1", 5, 50))
-    _append(overrides, "postproc.rerank.k2", trial.suggest_int("postproc.rerank.k2", 1, 20))
-    _append(
-        overrides,
-        "postproc.rerank.lambda_value",
-        trial.suggest_float("postproc.rerank.lambda_value", 0.0, 1.0),
-    )
-    _append(overrides, "postproc.rerank.device", "cpu")
+    _append_postproc(trial, overrides, space)
     return overrides
 
 
@@ -593,7 +622,8 @@ def _seed_eval_weights(cfg: DictConfig, path: Path) -> str:
     return "ema" if bool(cfg.train.ema.validate) else "raw"
 
 
-def params_from_config(path: Path, model: str) -> dict[str, Any]:
+def params_from_config(path: Path, model: str, space: str = CONTEST_SPACE) -> dict[str, Any]:
+    space = _require_space(space)
     loaded = OmegaConf.load(path)
     if not isinstance(loaded, DictConfig):
         raise TypeError("Seed configuration must be a mapping")
@@ -669,21 +699,9 @@ def params_from_config(path: Path, model: str) -> dict[str, Any]:
     if cfg.train.ema.enabled:
         params["eval.weights"] = _seed_eval_weights(cfg, path)
 
-    for name in (
-        "postproc.enabled",
-        "postproc.aqe.enabled",
-        "postproc.aqe.k",
-        "postproc.aqe.alpha",
-        "postproc.aqe.iterations",
-        "postproc.aqe.gallery_only",
-        "postproc.gallery_aggregation.enabled",
-        "postproc.gallery_aggregation.k",
-        "postproc.gallery_aggregation.alpha",
-        "postproc.gallery_aggregation.min_similarity",
-        "postproc.rerank.kind",
-        "postproc.rerank.k1",
-        "postproc.rerank.k2",
-        "postproc.rerank.lambda_value",
-    ):
+    names = list(STREAMING_SAFE_POSTPROC_NAMES)
+    if space == NONSTREAMING_SPACE:
+        names = [*AQE_PARAM_NAMES, *names]
+    for name in names:
         params[name] = _config_value(cfg, name)
     return params

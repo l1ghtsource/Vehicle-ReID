@@ -15,7 +15,7 @@ from augmentations import build_transforms
 from dataset.folds import query_gallery_split, read_annotations
 from dataset.images import VehicleDataset
 from models import ReIDModel
-from modules.inference import embed_loader
+from modules.inference import embed_loader, tta_context_pcts
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
 
@@ -63,11 +63,7 @@ def main() -> None:
     combined = pd.concat([query, gallery], ignore_index=True)
     device = torch.device(cfg.eval.device)
     model = ReIDModel(cfg).to(device).eval()
-    contexts = (
-        cfg.eval.tta.context_pcts
-        if cfg.eval.tta.enabled and cfg.eval.tta.context_pcts
-        else [cfg.data.context_pct]
-    )
+    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
     views = []
     for context in contexts:
         dataset = VehicleDataset(combined, cfg, build_transforms(cfg), context_pct=float(context))

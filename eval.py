@@ -17,7 +17,7 @@ from augmentations import build_transforms
 from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
 from dataset.images import VehicleDataset
 from models import ReIDModel
-from modules.inference import embed_loader
+from modules.inference import embed_loader, tta_context_pcts
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
 from refusal import refusal_accept, write_candidates
@@ -65,24 +65,26 @@ def remount_data_root(saved, effective, overridden: set[str]) -> None:
 
 
 def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
-    effective = OmegaConf.merge(
-        saved,
-        {
-            "checkpoint": cfg.checkpoint,
-            "eval": {
-                "split": cfg.eval.split,
-                "device": cfg.eval.device,
-                "output_dir": cfg.eval.output_dir,
-                "weights": cfg.eval.weights,
-                "top_k": cfg.eval.top_k,
-                "save_distances": cfg.eval.save_distances,
-                "precision": cfg.eval.precision,
-            },
-            "refusal": cfg.refusal,
-            "postproc": {"streaming": cfg.postproc.streaming},
-        },
-    )
     missing = object()
+    overlay = {
+        "checkpoint": cfg.checkpoint,
+        "eval": {
+            "split": cfg.eval.split,
+            "device": cfg.eval.device,
+            "output_dir": cfg.eval.output_dir,
+            "weights": cfg.eval.weights,
+            "top_k": cfg.eval.top_k,
+            "save_distances": cfg.eval.save_distances,
+            "precision": cfg.eval.precision,
+        },
+    }
+    refusal = OmegaConf.select(cfg, "refusal", default=missing)
+    if refusal is not missing:
+        overlay["refusal"] = refusal
+    streaming = OmegaConf.select(cfg, "postproc.streaming", default=missing)
+    if streaming is not missing:
+        overlay["postproc"] = {"streaming": streaming}
+    effective = OmegaConf.merge(saved, overlay)
     overridden: set[str] = set()
     for item in task_overrides() if override_items is None else override_items:
         key = override_key(item)
@@ -201,11 +203,7 @@ def main(cfg):
         g_indices = np.arange(len(q), len(frame))
     else:
         raise ValueError("eval.split must be val/test")
-    contexts = (
-        cfg.eval.tta.context_pcts
-        if cfg.eval.tta.enabled and cfg.eval.tta.context_pcts
-        else [cfg.data.context_pct]
-    )
+    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
     views = []
     for context in contexts:
         ds = VehicleDataset(frame, cfg, build_transforms(cfg), context_pct=float(context))

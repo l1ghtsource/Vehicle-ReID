@@ -128,6 +128,36 @@ class UnusedFeatReID(CnnReID):
         return {"embedding": torch.ones(len(x), 8, requires_grad=True)}
 
 
+class MultiBackbone(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.prefix = 0
+        self.early = nn.Conv2d(3, 64, kernel_size=1)
+        self.late = nn.Conv2d(3, 512, kernel_size=1)
+
+    def forward(self, x):
+        return [self.early(x), self.late(x)]
+
+
+class MultiLevelReID(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.frozen = False
+        self.backbone = MultiBackbone()
+        spec = SimpleNamespace(kind="attn", p=3.0, trainable=False, attention_hidden=128)
+        self.pools = nn.ModuleList([Pool(64, spec, 0), Pool(512, spec, 0)])
+        self.proj = nn.Linear(64 + 512, 8)
+
+    def freeze_backbone(self, frozen):
+        self.frozen = frozen
+
+    def forward(self, x):
+        levels = self.backbone(x)
+        pooled = [pool(feat) for pool, feat in zip(self.pools, levels, strict=True)]
+        raw = self.proj(torch.cat(pooled, 1))
+        return {"raw": raw, "neck": raw, "embedding": F.normalize(raw.float(), dim=1)}
+
+
 class HooklessReID(nn.Module):
     def __init__(self):
         super().__init__()
@@ -253,6 +283,24 @@ def test_pooling_variants_and_missing_modules():
         pooling_attention(HooklessReID(), x)
     with pytest.raises(RuntimeError, match="hooked"):
         eigen_cam(HooklessReID(), x)
+
+
+def test_pooling_attention_matches_multilevel_features():
+    model = MultiLevelReID()
+    x = images()
+    late = model.backbone(x)[-1].flatten(2).transpose(1, 2)
+    attn = model.pools[0].attention
+    assert isinstance(attn, nn.Sequential)
+    with pytest.raises(RuntimeError, match="mat1 and mat2"):
+        attn(late)
+    last = pooling_attention(model, x)
+    first = pooling_attention(model, x, level=0)
+    assert last.shape == first.shape == (2, 8, 8)
+    assert np.isfinite(last).all() and np.isfinite(first).all()
+    with pytest.raises(ValueError, match="out of range"):
+        pooling_attention(model, x, level=2)
+    with pytest.raises(ValueError, match="out of range"):
+        pooling_attention(model, x, level=-3)
 
 
 def test_attention_methods_require_vit_softmax():

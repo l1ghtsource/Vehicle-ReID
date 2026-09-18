@@ -62,6 +62,10 @@ def test_search_space_all_losses(loss):
     overrides = search_space.suggest_overrides(trial, "dinov3_convnext_large")
     assert f"loss={loss}" in overrides
     assert "eval.weights=ema" in overrides
+    assert "postproc.streaming=true" in overrides
+    assert "postproc.aqe.enabled=false" in overrides
+    assert "postproc.aqe.enabled" not in trial.params
+    assert "postproc.aqe.k" not in trial.params
     assert f"{loss}/loss.terms.0.weight" in trial.params
     assert "loss.terms.0.weight" not in trial.params
 
@@ -102,6 +106,32 @@ def test_search_space_helpers():
     output = []
     search_space._append(output, "x", [1, 2])
     assert output == ["x=[1,2]"]
+    with pytest.raises(ValueError, match="Unknown HPO space"):
+        search_space.suggest_overrides(cast(optuna.Trial, FakeTrial()), "vit", "batch")
+    with pytest.raises(ValueError, match="Unknown HPO space"):
+        search_space.params_from_config(cast(Any, None), "vit", "batch")
+
+
+def test_contest_space_never_enables_aqe():
+    contest = FakeTrial({"postproc.enabled": True, "postproc.aqe.enabled": True})
+    overrides = search_space.suggest_overrides(cast(optuna.Trial, contest), "vit")
+    assert "postproc.streaming=true" in overrides
+    assert "postproc.aqe.enabled=false" in overrides
+    assert "postproc.aqe.enabled" not in contest.params
+    assert "postproc.aqe.k" not in contest.params
+    assert "postproc.gallery_aggregation.enabled" in contest.params
+    assert "postproc.rerank.kind" in contest.params
+
+    research = FakeTrial({"postproc.enabled": True, "postproc.aqe.enabled": True})
+    research_overrides = search_space.suggest_overrides(
+        cast(optuna.Trial, research),
+        "vit",
+        search_space.NONSTREAMING_SPACE,
+    )
+    assert "postproc.streaming=false" in research_overrides
+    assert "postproc.aqe.enabled=true" in research_overrides
+    assert research.params["postproc.aqe.enabled"] is True
+    assert "postproc.aqe.k" in research.params
 
 
 def test_seed_params_from_config(cfg, tmp_path):
@@ -122,7 +152,16 @@ def test_seed_params_from_config(cfg, tmp_path):
     assert "model.gradient_checkpointing" not in params
     assert "data.sampler.steps_per_epoch" not in params
     assert params["eval.weights"] == "ema"
+    assert "postproc.aqe.enabled" not in params
+    assert "postproc.enabled" in params
     search_space.suggest_overrides(cast(optuna.Trial, optuna.trial.FixedTrial(params)), "convnext_tiny")
+    nonstreaming = search_space.params_from_config(path, "convnext_tiny", search_space.NONSTREAMING_SPACE)
+    assert "postproc.aqe.enabled" in nonstreaming
+    search_space.suggest_overrides(
+        cast(optuna.Trial, optuna.trial.FixedTrial(nonstreaming)),
+        "convnext_tiny",
+        search_space.NONSTREAMING_SPACE,
+    )
 
     cfg.train.ema.validate = False
     OmegaConf.save(cfg, path)
@@ -406,7 +445,7 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
     checkpoint = tmp_path / "model.ckpt"
     checkpoint.touch()
     trial = cast(optuna.Trial, FakeTrial())
-    monkeypatch.setattr(runner, "suggest_overrides", lambda trial, model: ["train.epochs=1"])
+    monkeypatch.setattr(runner, "suggest_overrides", lambda trial, model, space="contest": ["train.epochs=1"])
     monkeypatch.setattr(runner, "checkpoint_path", lambda fold_dir: checkpoint)
     monkeypatch.setattr(
         runner,
@@ -421,11 +460,31 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(runner, "has_cuda_oom", lambda logs: False)
     assert runner.run_trial(trial, "model", checkpoint, [3, 4, 5, 6, 7], tmp_path, "mAP", []) == 0.75
     overrides = json.loads((tmp_path / "trial_00000" / "overrides.json").read_text())
+    assert "data.validation.exclude_all_same_camera=false" in overrides
     assert "data.num_workers=8" in overrides
     assert "data.sampler.steps_per_epoch=null" in overrides
     assert "model.gradient_checkpointing=false" in overrides
     assert "trainer.precision=bf16-mixed" in overrides
     assert "checkpointing.monitor=val/mAP" in overrides
+    assert "postproc.streaming=true" in overrides
+    assert "postproc.aqe.enabled=false" in overrides
+    assert overrides[-2:] == ["postproc.streaming=true", "postproc.aqe.enabled=false"]
+
+    assert (
+        runner.run_trial(
+            trial,
+            "model",
+            checkpoint,
+            [3, 4, 5, 6, 7],
+            tmp_path,
+            "mAP",
+            [],
+            "nonstreaming",
+        )
+        == 0.75
+    )
+    nonstreaming = json.loads((tmp_path / "trial_00000" / "overrides.json").read_text())
+    assert nonstreaming[-1] == "postproc.streaming=false"
 
     monkeypatch.setattr(runner, "has_cuda_oom", lambda logs: True)
     with pytest.raises(optuna.TrialPruned, match="training"):
@@ -501,6 +560,13 @@ def test_prepare_folds_and_parse_args(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["run_optuna_search", "--gpus", "0,1,2,3,4"])
     args = runner.parse_args()
     assert args.model == "dinov3_convnext_large"
+    assert args.space == "contest"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["run_optuna_search", "--gpus", "0,1,2,3,4", "--space", "nonstreaming"],
+    )
+    assert runner.parse_args().space == "nonstreaming"
 
 
 def test_seed_score_and_signal_handler(tmp_path, monkeypatch):
@@ -521,8 +587,12 @@ class MainStudy:
         self.best_value = 0.9
         self.best_params = {"x": 1}
         self.queued_attrs = []
+        self.user_attrs = {}
         if complete:
             self.trials = [SimpleNamespace(state=TrialState.COMPLETE)]
+
+    def set_user_attr(self, name, value):
+        self.user_attrs[name] = value
 
     def enqueue_trial(self, params, user_attrs):
         self.queued_attrs.append(user_attrs)
@@ -552,6 +622,7 @@ def args_for_main(tmp_path, **kwargs):
         "log": tmp_path / "study.log",
         "seed_run": None,
         "override": [],
+        "space": "contest",
     }
     values.update(kwargs)
     return argparse.Namespace(**values)
@@ -572,12 +643,19 @@ def test_main_paths(tmp_path, monkeypatch):
     monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: study)
     runner.main()
     assert (args.out_dir / "best.json").exists()
+    assert study.user_attrs["space"] == "contest"
+
+    matching = MainStudy()
+    matching.user_attrs["space"] = "contest"
+    monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: matching)
+    runner.main()
+    assert matching.user_attrs["space"] == "contest"
 
     args.seed_run = tmp_path / "seed"
     args.seed_run.mkdir()
     seeded = MainStudy()
     monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: seeded)
-    monkeypatch.setattr(runner, "params_from_config", lambda path, model: {"x": 1})
+    monkeypatch.setattr(runner, "params_from_config", lambda path, model, space="contest": {"x": 1})
     monkeypatch.setattr(runner, "seed_run_score", lambda path, metric: 0.7)
     runner.main()
     assert seeded.trials[0].state == TrialState.WAITING
@@ -598,6 +676,14 @@ def test_main_paths(tmp_path, monkeypatch):
     with pytest.raises(SystemExit) as error:
         runner.main()
     assert error.value.code == 130
+
+    locked = MainStudy()
+    locked.user_attrs["space"] = "contest"
+    args.space = "nonstreaming"
+    monkeypatch.setattr(runner.optuna, "create_study", lambda **kwargs: locked)
+    with pytest.raises(SystemExit, match="locked to space contest"):
+        runner.main()
+    args.space = "contest"
 
     args.gpus = "3"
     with pytest.raises(SystemExit, match="five"):

@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 
 import modules.inference as inference
 import modules.losses.core as loss_core
-from modules.inference import embed_loader
+from modules.inference import embed_loader, embed_tensor, tta_context_pcts
 from modules.losses.core import AdaSP, LossCollection, Triplet
 from modules.metrics import retrieval_metrics
 from modules.optim import backbone_layer_map, build_optimizer, build_scheduler
@@ -140,6 +140,11 @@ def loader():
 
 
 def test_embed_loader_tta_and_guards(cfg, monkeypatch):
+    assert tta_context_pcts(None, 6.2) == [6.2]
+    assert tta_context_pcts(SimpleNamespace(enabled=False, context_pcts=[0, 50]), 10) == [10.0]
+    assert tta_context_pcts(SimpleNamespace(enabled=True, context_pcts=None), 10) == [10.0]
+    assert tta_context_pcts(SimpleNamespace(enabled=True, context_pcts=[]), 10) == [10.0]
+    assert tta_context_pcts(SimpleNamespace(enabled=True, context_pcts=[0, 50]), 10) == [0.0, 50.0]
     cfg.eval.device = "cpu"
     cfg.eval.precision = "fp32"
     cfg.eval.tta.enabled = True
@@ -167,7 +172,12 @@ def test_embed_loader_tta_and_guards(cfg, monkeypatch):
     cfg.model.backend = "timm"
 
     cfg.eval.tta.enabled = False
-    assert embed_loader(EmbedModel(as_dict=False), loader(), cfg, torch.device("cpu")).shape == (1, 3)
+    tensor_model = EmbedModel(as_dict=False)
+    loader_out = embed_loader(tensor_model, loader(), cfg, torch.device("cpu"))
+    batch = next(iter(loader()))["image"]
+    shared = embed_tensor(tensor_model, batch, torch.device("cpu"), tta=cfg.eval.tta, model_cfg=cfg.model)
+    assert loader_out.shape == (1, 3)
+    assert np.allclose(loader_out, shared.numpy(), atol=1e-5)
     cfg.eval.tta.enabled = True
     for scales, rotations in (([], [0]), ([0], [0]), ([1], [])):
         cfg.eval.tta.scales = scales

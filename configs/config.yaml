@@ -43,7 +43,8 @@ data:
   validation:
     query_per_identity: 1
     cross_camera: true
-    exclude_all_same_camera: true
+    # Junk is same vehicle_id and same camera_id. Other identities on the query camera stay.
+    exclude_all_same_camera: false
     ranks: [1, 5, 10]
 train:
   epochs: 40
