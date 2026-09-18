@@ -2,7 +2,7 @@
 # Rank-average over the query batch is not streaming-safe.
 kind: ensemble
 cosine_threshold: 0.6372
-model_path: artifacts/refusal/eva02_catboost.cbm
+model_path: weights/finetuned/eva02_catboost.cbm
 model_threshold: 0.4149
 rank_threshold: null
 k: 10

@@ -27,6 +27,7 @@ to the dataset and label mapping that produced them.
 - Linux is recommended.
 - Python 3.11 or 3.12.
 - `uv` for dependency and environment management.
+- Git LFS for `weights/finetuned/` serving checkpoints.
 - A CUDA-compatible GPU for training and large-backbone smoke tests.
 - Sufficient storage for datasets, checkpoints, and pretrained weights.
 
@@ -44,6 +45,12 @@ The equivalent Make target is:
 
 ```bash
 make setup
+```
+
+After changing dependencies, refresh the lock and the hashed Docker freeze:
+
+```bash
+make lock
 ```
 
 Commands in this README use executables from `.venv`. If the environment is activated, the
@@ -390,7 +397,8 @@ table.
 ```
 
 `eva02_model` and `eva02_ensemble` need a `.cbm` at `refusal.model_path` (default
-`artifacts/refusal/eva02_catboost.cbm` from `refusal.save_boosting`). Thresholds in those YAMLs are
+`weights/finetuned/eva02_catboost.cbm`). Copy a trained CatBoost head there from
+`refusal.save_boosting` before building the image. Thresholds in those YAMLs are
 frozen EVA02 nested 5-fold inner-CV operating points, not retuned on the test set. TabM remains a
 `refusal/` calibration head and is not a submit preset.
 
@@ -629,7 +637,57 @@ Download supported external weights on a machine with Hugging Face access:
 
 Copy the resulting `weights/` directory to the training machine and set the corresponding
 `model.checkpoint_path`. Use `model.local_files_only=true` where supported to prevent network
-access.
+access. Each download is pinned by file SHA-256 (and a Hub commit for RADIO and LLM2CLIP). A
+checksum mismatch after download is an error.
+
+Contest serving weights are not these Hub snapshots. Put the submitted Lightning checkpoint and
+optional refusal CatBoost file under `weights/finetuned/` and record checksums:
+
+```text
+weights/finetuned/
+├── SHA256SUMS
+├── model.ckpt
+└── eva02_catboost.cbm
+```
+
+Those binaries are Git LFS objects (see `.gitattributes`). After adding or replacing them:
+
+```bash
+.venv/bin/python scripts/verify_weights.py --root weights/finetuned --write
+```
+
+`SHA256SUMS` stays a plain-text file. An empty checksum file is valid only while the directory has
+no payload files; the Docker build verifies the tree.
+
+## Contest Docker image
+
+The image may use the network during `docker build`. `docker run` is fully offline:
+`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and Compose `network_mode: none`. Python packages are
+installed from `requirements/runtime.txt` with `pip install --require-hashes` on public PyPI. That
+file is the frozen export of `uv.lock`; regenerate it with `make lock`. The lab `uv.lock` registry
+URL is not used at image build time.
+
+The serving checkpoint is copied into the image from `weights/finetuned/`. Do not mount a host
+`weights/` directory over `/app/weights`, or the baked files are hidden. Mount only contest data and
+the output directory:
+
+```bash
+docker compose build
+DATA_ROOT=./data OUTPUT_DIR=./runs/submission docker compose run --rm retrieval
+```
+
+The default command is:
+
+```text
+checkpoint=/app/weights/finetuned/model.ckpt
+data.root=/data
+eval.split=test
+eval.output_dir=/runs/submission
+```
+
+Override `CHECKPOINT` or pass extra Hydra flags after `retrieval`. Eval loads
+`ReIDModel(..., initialize_pretrained=False)`, so Hub/timm pretrained weights are not fetched at
+inference. `extra_data/`, tests, notebooks, and training runs are not copied into the image.
 
 ## Cross-validation
 
@@ -796,7 +854,9 @@ exclusion. Function-local imports are forbidden by Ruff rule `PLC0415`.
 
 ## Reproducibility and safety
 
-- Python and core ML dependency versions are pinned in `pyproject.toml` and `uv.lock`.
+- Python and core ML dependency versions are pinned exactly in `pyproject.toml`, `uv.lock`, and
+  hashed `requirements/runtime.txt`.
+- Finetuned serving weights under `weights/finetuned/` are Git LFS objects with `SHA256SUMS`.
 - Fold generation is deterministic for a fixed annotation file, seed, and fold count.
 - Data fingerprints are persisted and checked when folds or checkpoints are reused.
 - Validation identities are disjoint from training identities.
@@ -818,9 +878,12 @@ notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation 
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
 refusal/        Open-set accept/refuse: cosine threshold, CatBoost, TabM, eval-time mask, contest F1/TNR/PR-AUC
-scripts/        Dataset audit, fold creation, weight download, model checks, zero-shot probes, and CV aggregation
+requirements/   Hashed pip freeze used by the contest Docker image
+scripts/        Dataset audit, fold creation, weight download, checksum verification, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
 third_party/    Vendored upstream implementations
+weights/        Local Hub snapshots (gitignored) and `finetuned/` serving artifacts (Git LFS)
+Dockerfile      Offline contest serving image
 pretrain.py     Hydra pretraining entrypoint on extra data
 train.py        Hydra training entrypoint
 eval.py         Checkpoint-driven evaluation and retrieval entrypoint

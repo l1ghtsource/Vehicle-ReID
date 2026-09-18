@@ -1,9 +1,12 @@
 PYTHON ?= .venv/bin/python
 RUFF ?= .venv/bin/ruff
 TY ?= .venv/bin/ty
-.PHONY: setup test lint folds audit smoke
+.PHONY: setup test lint folds audit smoke lock
 setup:
 	uv sync --extra dev
+lock:
+	uv lock
+	uv export --frozen --no-dev --no-emit-project --format requirements.txt -o requirements/runtime.txt
 test:
 	$(PYTHON) -m pytest -q
 lint:

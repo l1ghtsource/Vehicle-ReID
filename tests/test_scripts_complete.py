@@ -121,6 +121,7 @@ def test_download_weights_all_models(tmp_path, monkeypatch):
         "hf_hub_download",
         lambda *args, **kwargs: files.append((args, kwargs)) or "file",
     )
+    monkeypatch.setattr(download_weights, "verify_digests", lambda *args, **kwargs: None)
     for name in ("dinov3_base", "dinov3_large", "radio", "llm2clip"):
         monkeypatch.setattr(
             sys,
@@ -130,6 +131,10 @@ def test_download_weights_all_models(tmp_path, monkeypatch):
         download_weights.main()
     assert len(snapshots) == 2
     assert len(files) == 2
+    assert "revision" not in snapshots[0][1]
+    radio = download_weights.MODELS["radio"]
+    assert radio["kind"] == "file"
+    assert files[0][1]["revision"] == radio["revision"]
 
     monkeypatch.setattr(
         sys,
@@ -137,6 +142,7 @@ def test_download_weights_all_models(tmp_path, monkeypatch):
         ["download_weights", "radio", "--directory", str(tmp_path)],
     )
     monkeypatch.setattr("huggingface_hub.hf_hub_download", lambda *args, **kwargs: "file")
+    monkeypatch.setattr("scripts.verify_weights.verify_digests", lambda *args, **kwargs: None)
     runpy.run_module("scripts.download_weights", run_name="__main__")
 
 

@@ -8,7 +8,9 @@ logs/
 outputs/
 results/
 checkpoints/
-weights/
+/weights/*
+!/weights/finetuned/
+!/weights/finetuned/**
 multirun/
 tmp/
 *.ckpt

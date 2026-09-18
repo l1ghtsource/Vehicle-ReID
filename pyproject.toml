@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=75"]
+requires = ["setuptools==84.0.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -17,21 +17,23 @@ dependencies = [
     "albumentations==2.0.8",
     "pandas==2.3.2",
     "scikit-learn==1.7.2",
-    "catboost>=1.2,<2",
-    "opencv-python-headless>=4.10,<5",
+    "catboost==1.2.10",
+    "opencv-python-headless==4.14.0.94",
     "pytorch-metric-learning==2.9.0",
-    "numpy>=1.26,<3",
-    "scipy>=1.14",
-    "pillow>=11",
-    "einops>=0.8",
-    "huggingface-hub>=0.34,<1",
+    "numpy==2.4.6; python_full_version < '3.12'",
+    "numpy==2.5.3; python_full_version >= '3.12'",
+    "scipy==1.17.1; python_full_version < '3.12'",
+    "scipy==1.18.1; python_full_version >= '3.12'",
+    "pillow==12.3.0",
+    "einops==0.8.2",
+    "huggingface-hub==0.36.2",
     "open_clip_torch==3.1.0",
-    "ftfy",
-    "regex",
-    "safetensors",
-    "tqdm",
-    "optuna>=4.5,<5",
-    "optuna-dashboard>=0.17,<1",
+    "ftfy==6.3.1",
+    "regex==2026.9.10",
+    "safetensors==0.8.0",
+    "tqdm==4.70.1",
+    "optuna==4.9.0",
+    "optuna-dashboard==0.21.0",
 ]
 [project.optional-dependencies]
 dev = ["pytest==8.4.2", "pytest-cov==7.1.0", "ruff==0.15.7", "ty==0.0.81"]

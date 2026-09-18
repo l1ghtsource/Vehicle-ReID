@@ -4,12 +4,16 @@ services:
     gpus: all
     network_mode: none
     shm_size: 4gb
+    environment:
+      HF_HUB_OFFLINE: "1"
+      HF_DATASETS_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      NO_ALBUMENTATIONS_UPDATE: "1"
     volumes:
-      - ./data:/data:ro
-      - ./runs:/runs
-      - ./weights:/app/weights:ro
+      - ${DATA_ROOT:-./data}:/data:ro
+      - ${OUTPUT_DIR:-./runs/submission}:/runs/submission
     command:
-      - checkpoint=${CHECKPOINT:?Set CHECKPOINT to a checkpoint path under /runs}
+      - checkpoint=${CHECKPOINT:-/app/weights/finetuned/model.ckpt}
       - data.root=/data
       - eval.split=test
       - eval.output_dir=/runs/submission
