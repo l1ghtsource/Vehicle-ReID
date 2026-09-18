@@ -466,6 +466,37 @@ maps = interpret(model, images, method="chefer", reference=gallery_embedding)
 canvas = overlay(crop_hwc, maps[0])
 ```
 
+### Embedding robustness (post-hoc)
+
+`posthoc/` measures whether the retrieval embedding is stable under input corruptions. The gallery
+stays clean. Each query crop is replaced with `k` corrupted copies (severity 1–5). Metrics compare
+the corrupted queries to the original query, not to a new trained model.
+
+| Metric | What it measures | Robust if |
+| --- | --- | --- |
+| `cosine_mean` / `cosine_min` / `cosine_std` | cosine(clean embedding, each of the `k` corrupted embeddings) | close to 1 / 1 / 0 |
+| `angular_mean_deg` | mean arccos(cosine) in degrees | close to 0 |
+| `pairwise_cosine` | agreement among the `k` copies of one query | close to 1 |
+| `overlap` / `jaccard` | set overlap / IoU of clean vs corrupted top-`k` gallery neighbors | close to 1 |
+| `kendall` | Kendall-τ on the union of those two top-`k` lists | close to 1 |
+| `orig_r1_rank` | rank of the clean Rank-1 gallery image after the query is corrupted | 1 |
+| `rank1_image_same` / `rank1_id_same` | same gallery image / same identity still at Rank-1 | 1 |
+| `delta_ap` | AP(corrupted query, clean gallery) − AP(clean query) | close to 0 |
+| `delta_mean_pos_rank` | shift of true-positive ranks | close to 0 |
+| `psnr` / `l1` | pixel distortion of the crop (context for the drop) | — |
+
+Corruptions: `identity`, `gaussian_noise`, `impulse_noise`, `gaussian_blur`, `motion_blur`, `jpeg`,
+`brightness`, `contrast`, `saturate`, `downsample`, `occlude`, `rotate`, `crop`, `fog`.
+
+```python
+from posthoc import apply_k, compare_query, embed
+
+crops = apply_k(query_rgb, "jpeg", severity=3, k=4, seed=0)
+row = compare_query(
+    clean_emb, corrupted_emb, gallery_emb, qid=qid, gids=gids, keep=keep, k_neighbors=10
+)
+```
+
 ### Postprocessing
 
 Enable transductive retrieval postprocessing:
@@ -701,7 +732,8 @@ extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: Grad-CAM, HiResCAM, LayerCAM, EigenCAM, attention rollout, Chefer
-notebooks/      EDA, OOF analysis (`oof_analysis_eva02.ipynb`), and interpretation (`interp_eva02.ipynb`)
+notebooks/      EDA, OOF analysis (`oof_analysis_eva02.ipynb`), interpretation (`interp_eva02.ipynb`), robustness (`posthoc_eva02.ipynb`)
+posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
 scripts/        Dataset audit, fold creation, weight download, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
