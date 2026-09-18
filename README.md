@@ -297,6 +297,18 @@ Experiment presets provide larger ready-to-run configurations:
 recipe (5-fold OOF mAP 0.847, mAP@10 0.834): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP,
 linear schedule, EMA. Pass `model=` to reuse the recipe with another backbone.
 
+![Per-fold OOF metrics for current_best_tuned](notebooks/eva02/readme_figs/current_best_folds.png)
+
+*Identity-disjoint 5-fold OOF on EVA02 (`runs/cv/eva02_trial23`). Query-weighted means: mAP 0.847,
+mAP@10 0.834, Rank-1 0.842. Fold 4 is the strongest; fold 3 is the weakest. Checkpoint selection
+and Optuna still use full-gallery mAP; mAP@10 is the contest ranking metric.*
+
+![Fold-0 retrieval examples: query, Rank-1, first true positive](notebooks/eva02/readme_figs/current_best_pairs.jpg)
+
+*Fold-0 examples. Green Rank-1 is a correct identity; red is a lookalike. The third column is the
+first true positive in the ranking. Hard misses are usually the same body style and color, not a
+random vehicle. Full case study: `notebooks/eva02/oof_analysis.ipynb`.*
+
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
 updates happen in a defined order.
@@ -507,6 +519,20 @@ query_maps, gallery_maps, cosine = interpret_pair(
 canvas = overlay(crop_hwc, query_maps[0])
 ```
 
+![Image-level attribution methods on the same OOF queries](notebooks/eva02/readme_figs/interp_methods.jpg)
+
+*Each row is one fold-0 OOF query. `pooling` is the trained spatial attention that actually builds
+the embedding. `last_attn` / `rollout` are CLS maps (this recipe does not retrieve with CLS). CAM
+methods here use embedding energy (no gallery vector). Occlusion is skipped in this grid because
+EVA02's 24×24 patch grid is too many forwards.*
+
+![Pair cosine attribution: query and gallery maps for gradsim, grad-rollout, occlusion, Chefer](notebooks/eva02/readme_figs/interp_pairs.jpg)
+
+*Pair maps: `interpret_pair` backprops `cosine(z_q, z_g)` into both crops. Columns are query and
+gallery for `gradsim`, `grad_rollout`, `occlusion` (`block=4`), and `chefer`. Rows alternate true
+positive vs Rank-1. Warm regions are the patches that currently support that cosine. Notebook:
+`notebooks/eva02/interp.ipynb`.*
+
 ### Pair matching (EfficientLoFTR)
 
 `matching/` runs detector-free semi-dense correspondence on a query/gallery crop pair using the
@@ -535,6 +561,19 @@ order = reorder_head(cosine_order, inlier_counts, k=10)
 
 Local weights only (`local_files_only=True`). The checkpoint is gitignored under `weights/` like
 other Hub snapshots; it is not part of contest serving.
+
+![EfficientLoFTR correspondences on retrieval pairs](notebooks/eva02/readme_figs/matching_pairs.jpg)
+
+*Green lines are high-score correspondences. An easy true pair (id 1283) and a Rank-1 miss (id 1005)
+vs its true positive and vs the distractor. `n_matches` can fire on similar paint; `n_inliers` is
+the stricter geometric check.*
+
+![Match evidence vs cosine on the cosine top-10](notebooks/eva02/readme_figs/matching_verifier.jpg)
+
+*Every fold-0 query's cosine top-10, scored by EfficientLoFTR. Same-id pairs have more inliers on
+average (56 vs 33), but the clouds overlap. Replacing the embedding Rank-1 with inlier count
+**hurts** (Rank-1 0.838 → 0.479). Matching is a visualization / second opinion, not a ranker.
+Notebook: `notebooks/eva02/matching.ipynb`.*
 
 ### Embedding robustness (post-hoc)
 
@@ -566,6 +605,18 @@ row = compare_query(
     clean_emb, corrupted_emb, gallery_emb, qid=qid, gids=gids, keep=keep, k_neighbors=10
 )
 ```
+
+![Mean cosine between clean and corrupted query embeddings](notebooks/eva02/readme_figs/posthoc_cosine.jpg)
+
+*Gallery stays clean. Each cell is mean cosine(clean query, corrupted query) over fold-0 OOF.
+JPEG / blur / color barely move the embedding. Hard crops (`crop` severity 5 → 0.59) and heavy
+occlusion / downsample do.*
+
+![Pixel L1 vs embedding cosine under each corruption](notebooks/eva02/readme_figs/posthoc_sensitivity.jpg)
+
+*Same probe: how much the crop has to change in pixels before the 256-D vector moves. Aggressive
+re-crops drop cosine far more than an equivalent L1 of noise. Notebook:
+`notebooks/eva02/posthoc_stability.ipynb`.*
 
 ### Postprocessing
 
@@ -714,6 +765,18 @@ Outer-OOF on the 50/50 pairs (one confusion matrix over concatenated per-fold de
 | Unanimous (3 heads) | 0.755 | 0.702 | 0.879 | 0.763 |
 
 Serving `eva02_ensemble` is the streaming-safe vote of the frozen cosine and CatBoost heads, not the OOF rank-average.
+
+![Outer-OOF refusal head comparison](notebooks/eva02/readme_figs/refusal_bars.jpg)
+
+*Nested 5-fold inner CV, 50/50 match vs stripped-gallery pairs. Contest score is `0.7 × F1 + 0.3 ×
+TNR`. “Always accept” has no TNR. Rank-mean is the best OOF calibration; serving `eva02_ensemble`
+is the streaming-safe cosine+CatBoost vote, not this rank-average.*
+
+![Outer-OOF precision-recall for match vs no-match](notebooks/eva02/readme_figs/refusal_pr.jpg)
+
+*Threshold-free ranking of “does a gallery match exist?”. Rank-mean PR-AUC 0.879; cosine 0.872;
+CatBoost 0.864. Majority vote is a hard decision, not a score, so its curve collapses. Notebook:
+`notebooks/eva02/refusal_analysis.ipynb`.*
 
 `refusal/` implements three accept/refuse heads on top of frozen retrieval embeddings, plus
 ensembles of those heads. None of them uses `camera_id` or `vehicle_id` as a feature; those labels
@@ -950,6 +1013,13 @@ study, and child processes are terminated on interruption. Each trial stores sam
 exact Hydra overrides, fold logs, exit codes, metrics, OOF metadata, and OOF embeddings. `best.json`
 always identifies the best completed trial.
 
+![Optuna contest-space search on ConvNeXt-Base](notebooks/eva02/readme_figs/optuna_history.png)
+
+*`convnext_base_all`, contest space, query-weighted 5-fold OOF mAP. Trial 0 is the seeded DINOv3
+ConvNeXt-Base run (~0.705). Trial 23 is the best completed trial (0.759). That recipe — not the
+ConvNeXt weights — is what `current_best_tuned` applies to EVA02-L-14-336, where OOF mAP becomes
+0.847. Later trials did not beat 23. Live view: Optuna Dashboard on the same SQLite file.*
+
 Seed a new study with the completed DINOv3 ConvNeXt Base run. Its configuration and query-weighted
 OOF mAP are registered as the first completed Optuna trial without retraining:
 
@@ -1049,7 +1119,7 @@ models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: cosine Grad-Sim, Grad-Attention rollout, patch occlusion, CAM, Chefer
 matching/       EfficientLoFTR pair matching, homography inliers, cosine top-k rerank
-notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), matching (`eva02/matching.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`), inference profile (`eva02/inference_profile.ipynb`)
+notebooks/      EDA plus EVA02 OOF, interp, matching, posthoc, refusal, inference profile; `eva02/readme_figs/` is the README image set
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
 profiling/      Contest extract() timing, weight inventory vs 2 GiB, VRAM, determinism
