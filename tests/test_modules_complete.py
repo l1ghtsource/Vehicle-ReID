@@ -272,6 +272,27 @@ def test_metrics_validation_and_camera_policy():
     )
     assert metrics["mAP"] == 1.0
     assert metrics["mAP@10"] == 1.0
+    open_set = retrieval_metrics(
+        [[0.1, 0.2], [0.3, 0.4]],
+        [1, 99],
+        [1, 2],
+        [0, 0],
+        [1, 1],
+    )
+    assert open_set["evaluated_queries"] == 1
+    assert open_set["queries_without_positive"] == 1
+    assert open_set["mAP"] == pytest.approx(1.0)
+    mixed = retrieval_metrics(
+        [[0.0, 0.1, 0.2], [0.3, 0.05, 0.4]],
+        [1, 2],
+        [1, 2, 3],
+        [0, 1],
+        [0, 2, 2],
+    )
+    assert mixed["evaluated_queries"] == 1
+    assert mixed["queries_without_positive"] == 1
+    with pytest.raises(ValueError, match="valid gallery positive"):
+        retrieval_metrics([[0.0]], [1], [1], [0], [0])
 
 
 def test_ema_and_awp_all_paths():

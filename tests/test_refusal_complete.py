@@ -151,6 +151,9 @@ def test_metrics_threshold_rules_and_baselines():
     mixed = candidate_metrics(y, scores, 0.5, wrong)
     assert mixed["tp"] == 1 and mixed["fp"] == 2 and mixed["fp_closed"] == 1
     assert mixed["tnr"] == pytest.approx(2 / 3)
+    micro = candidate_metrics(np.array([1, 1]), np.array([0.9, 0.8]), 0.0, np.array([True, False]))
+    assert micro["tp"] == 1 and micro["fp"] == 1 and micro["fn"] == 0
+    assert micro["f1"] == pytest.approx(2 / 3)
     rank = ranking_metrics(y, scores)
     assert 0.5 < rank["pr_auc"] <= 1 and 0.5 < rank["roc_auc"] <= 1
     always = candidate_metrics(y, scores, -1, top)

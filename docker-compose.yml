@@ -13,7 +13,9 @@ services:
       - ${DATA_ROOT:-./data}:/data:ro
       - ${OUTPUT_DIR:-./runs/submission}:/runs/submission
     command:
-      - checkpoint=${CHECKPOINT:-/app/weights/finetuned/model.ckpt}
+      - checkpoint=${CHECKPOINT:-/app/weights/finetuned/eva02.pt}
       - data.root=/data
       - eval.split=test
       - eval.output_dir=/runs/submission
+      - eval.top_k=10
+      - refusal=eva02_ensemble

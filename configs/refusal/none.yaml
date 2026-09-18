@@ -1,4 +1,4 @@
-# Default: write every query to candidates.csv.
+# Default: write every query to candidates.csv (no open-set refusal).
 kind: none
 cosine_threshold: null
 model_path: null

@@ -21,6 +21,7 @@ to the dataset and label mapping that produced them.
 - Open-set refusal: cosine threshold, CatBoost, and TabM on retrieval-set features.
 - Reproducible GroupKFold splits with no vehicle identity overlap between train and validation.
 - CPU/offline test suite with 100% line coverage for first-party Python code.
+- Contest serving file is a compact EMA `.pt` exported from a Lightning checkpoint.
 
 ## Requirements
 
@@ -373,7 +374,7 @@ Evaluate the validation split:
 
 ```bash
 .venv/bin/python eval.py \
-  checkpoint=/path/to/model.ckpt \
+  checkpoint=weights/finetuned/eva02.pt \
   eval.split=val
 ```
 
@@ -381,24 +382,26 @@ Generate test query/gallery retrieval results:
 
 ```bash
 .venv/bin/python eval.py \
-  checkpoint=/path/to/model.ckpt \
+  checkpoint=weights/finetuned/eva02.pt \
   eval.split=test
 ```
 
 Open-set refusal is applied only to contest `candidates.csv`. Serving heads and frozen thresholds
-live in `configs/refusal/`. Default `refusal=none` writes every query. EVA02 serving presets drop
-refused queries (no rows for that `query_id`). Internal `submission.csv` stays a complete top-K
-table.
+live in `configs/refusal/`. Default local `refusal=none` writes every query. The contest Docker
+image defaults to `refusal=eva02_ensemble`. EVA02 serving presets drop refused queries: **no rows**
+for that `query_id` (not an empty `gallery_id`, not a sentinel). `submission.csv` is ranking-only:
+exactly `eval.top_k` (10) gallery IDs for **every** query, including open-set and refused ones, with
+no score column and no skipped `query_id`.
 
 ```bash
-.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_threshold
-.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_model
-.venv/bin/python eval.py checkpoint=/path/to/model.ckpt eval.split=test refusal=eva02_ensemble
+.venv/bin/python eval.py checkpoint=weights/finetuned/eva02.pt eval.split=test refusal=eva02_threshold
+.venv/bin/python eval.py checkpoint=weights/finetuned/eva02.pt eval.split=test refusal=eva02_model
+.venv/bin/python eval.py checkpoint=weights/finetuned/eva02.pt eval.split=test refusal=eva02_ensemble
 ```
 
 `eva02_model` and `eva02_ensemble` need a `.cbm` at `refusal.model_path` (default
-`weights/finetuned/eva02_catboost.cbm`). Copy a trained CatBoost head there from
-`refusal.save_boosting` before building the image. Thresholds in those YAMLs are
+`weights/finetuned/eva02_catboost.cbm`). Export it from EVA02 OOF embeddings with
+`scripts/export_refusal.py`. Thresholds in those YAMLs are
 frozen EVA02 nested 5-fold inner-CV operating points, not retuned on the test set. TabM remains a
 `refusal/` calibration head and is not a submit preset.
 
@@ -410,8 +413,10 @@ eval.weights=raw
 eval.weights=ema
 ```
 
-`auto` uses the validation-weight choice stored in the checkpoint. Requesting EMA weights from a
-checkpoint without EMA state is an error.
+`auto` uses the weight kind stored in the file (`validation_weights` on a Lightning `.ckpt`,
+`weights` on a serving `.pt`). Requesting EMA weights from a checkpoint without EMA state is an
+error. A serving `.pt` contains one exported set (usually EMA); asking for the other kind is an
+error.
 
 Evaluation preserves the original query and gallery CSV order. It refuses query/gallery image
 overlap because no implicit self-match policy is assumed.
@@ -459,7 +464,7 @@ TTA is configured in `eval.tta`:
 
 ```bash
 .venv/bin/python eval.py \
-  checkpoint=/path/to/model.ckpt \
+  checkpoint=weights/finetuned/eva02.pt \
   eval.tta.enabled=true \
   eval.tta.hflip=true \
   eval.tta.scales='[0.9,1.0,1.1]' \
@@ -550,7 +555,7 @@ rerankers directly to measure the gap; those numbers are not the submission reci
 
 ```bash
 .venv/bin/python eval.py \
-  checkpoint=/path/to/model.ckpt \
+  checkpoint=weights/finetuned/eva02.pt \
   postproc.enabled=true \
   postproc.gallery_aggregation.enabled=true \
   postproc.rerank.kind=k_reciprocal
@@ -570,19 +575,65 @@ The evaluation directory contains:
   `image_id`. Local `eval.split=val` writes the same file over the held-out fold table instead.
 - `retrieval_embeddings.npy`: query and gallery embeddings after enabled expansion stages.
 - `distances.npy`: final query-to-gallery distance matrix, when enabled.
-- `submission.csv`: internal wide top-K table (`query_id,gallery_id_1,...`).
-- `candidates.csv`: contest file. Columns `query_id,gallery_id,confidence` in that order, header
-  required. One row per ranked hit. `refusal=` (`none` / `eva02_threshold` / `eva02_model` /
-  `eva02_ensemble`) decides which queries are written; a refused query has **no rows**. Empty
-  `gallery_id` and placeholder values are not written (the scorer ignores them anyway).
+- `submission.csv`: wide top-10 table `query_id,gallery_id_1,...,gallery_id_10`. One row per query
+  in CSV order, including open-set and refused queries. No `confidence` column. Empty cells and
+  skipped queries are invalid here; refusal is not expressed in this file.
+- `candidates.csv`: contest accept/refuse file. Columns `query_id,gallery_id,confidence` in that
+  order, header required. `confidence` is a monotone similarity score (higher = more confident);
+  the range need not be `[0, 1]`. Organizers rank by this value and take the **max-confidence**
+  row per `query_id`. Extra rows below that top candidate do not affect F1 or TNR; there is no
+  cap on row count. `refusal=` (`none` / `eva02_threshold` / `eva02_model` / `eva02_ensemble`)
+  decides which queries are written. A refused query has **no rows**. Empty `gallery_id` and
+  placeholder values are not written. Organizers do **not** apply a second threshold to
+  `confidence`; including a `query_id` is the accept decision.
 - `query.csv` and `gallery.csv`: exact evaluated row order.
 - `embedding_order.csv`: sidecar `image_id` list for `embeddings.npy` (not required by the scorer).
 - `metrics.json`: run metadata and validation metrics when labels are available.
 - `config.yaml`: resolved evaluation configuration.
 
 Validation reports full-gallery mAP (checkpoint selection and Optuna), official mAP@10 over the
-submission top-10, mINP, and configured CMC ranks. Queries with no valid positive are counted
-and excluded from metric averages; evaluation fails if no query has a valid positive.
+submission top-10, mINP, and configured CMC ranks. After junk filtering (same-camera gallery
+images), queries with no remaining valid positive are **excluded from the mAP@10 / Rank-1 / Rank-5
+average**, not scored as AP=0. That includes unmarked open-set queries (~20% of the closed test)
+and any query whose only gallery positive was junk. Those queries are scored only through
+`candidates.csv` (F1, TNR), where the correct output is a refusal (no row). Evaluation fails if
+no query has a valid positive.
+
+### Contest inference profile
+
+Organizer timing is the full `extract()` cycle on one vehicle: disk read, decode, bbox crop,
+preprocessing, forward, postprocessing, L2. Gallery search and re-ranking are excluded — they scale
+with gallery size, not with the embedding model. `profiling/` reproduces that protocol.
+
+- `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
+  and after every timed sample.
+- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32, each run at least 10 seconds.
+  The score uses the best FPS.
+- Also recorded: peak VRAM, weight-load time (reference), total weight-file bytes, two-run
+  determinism.
+
+Performance is 20% of the contest score: `10% × latency_score + 10% × throughput_score`.
+
+| | Full score | Linear | Zero |
+| --- | --- | --- | --- |
+| Latency (batch=1, full cycle) | ≤ 40 ms | 40–80 ms | > 80 ms |
+| Throughput (best FPS) | ≥ 100 | 50–100 | < 50 |
+
+Weight files above 2 GiB are **not admitted** to this performance evaluation (no partial penalty).
+The 2 GiB cap is the sum of every inference weight file in the solution directory with suffix
+`.pt .pth .bin .onnx .engine .plan .safetensors .ckpt .trt .pb .tflite .npz`. Auxiliary CatBoost
+`.cbm` files are reported by `profiling/` but are **not** in that official glob.
+
+The run-time budget is about `latency_b1 × n_test × 3` (~4 minutes at the current closed-test
+size). Organizers pass the image directory and CSV (`image_id, x, y, w, h`) as a batch; one
+`docker run --gpus all` (or Compose equivalent) must write `submission.csv`, `embeddings.npy`, and
+`candidates.csv`. Streaming independence (no query expansion, no use of other test queries) is
+checked in source at the final review, not by the launch format.
+
+`notebooks/eva02/inference_profile.ipynb` charts stage costs, latency, FPS vs batch, VRAM, the
+weight inventory against the 2 GiB cap, and these performance scores. The contest payload is
+`weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A training Lightning `.ckpt`
+is not submitted: export it with `scripts/export_serving.py`.
 
 ## Open-set refusal
 
@@ -593,6 +644,21 @@ mixture. It uses the same 5 identity-disjoint OOF folds, nested: models and oper
 fit with inner CV on four folds, then scored on the held fold. Labels are the 50/50 pairs
 (full gallery vs that identity stripped from the gallery). Prevalence on this probe is therefore
 balanced, not 20% open.
+
+Contest **F1 and TNR are micro**, not macro: one confusion matrix over the whole query set
+(TP/FP/FN/TN summed, then F1/TNR from those totals). There is no per-query or per-identity
+average. Both metrics are computed only from `candidates.csv`. `submission.csv` is ignored for
+F1/TNR.
+
+Contest F1 is query-level: TP only if the query has a gallery match **and** the highest-confidence
+candidate is that identity. Extra candidates below that top row do not change F1 or TNR. Wrong
+top-1 on a closed query is FP, not TP. TNR uses only queries with no gallery match. PR-AUC remains
+a threshold-free ranking of match vs no-match queries.
+
+The operating points in `configs/refusal/` are frozen EVA02 nested 5-fold inner-CV maxima of that
+micro F1 (cosine 0.6532, CatBoost 0.4329). They are the team's accept/refuse rule for forming
+`candidates.csv`. Organizers do not re-apply them, and `confidence` is not required to be a
+calibrated probability.
 
 `refusal/` implements three accept/refuse heads on top of frozen retrieval embeddings, plus
 ensembles of those heads. None of them uses `camera_id` or `vehicle_id` as a feature; those labels
@@ -611,17 +677,14 @@ exist only while building the training pairs.
    use the query batch). Serving `eva02_ensemble` is a streaming-safe unanimous vote: accept if
    both the frozen cosine and CatBoost heads accept that query.
 
-Contest F1 is query-level, not pair-level: TP only if the query has a gallery match **and**
-the highest-confidence candidate is that identity. Extra candidates below rank-1 do not
-change F1 or TNR. Wrong top-1 on a closed query is FP, not TP. TNR uses only queries with
-no gallery match. PR-AUC remains a threshold-free ranking of match vs no-match queries.
-
 `eval.py` selects a frozen submit head with `refusal=` (`none`, `eva02_threshold`, `eva02_model`,
 `eva02_ensemble`). Serving thresholds and the CatBoost path live in `configs/refusal/`. Default
-`none` writes every query. The mask is applied to `candidates.csv` only. Each head scores one
-query against the gallery; serving does not rank-average across the test query batch.
+local `none` writes every query; the Docker image uses `eva02_ensemble`. The mask is applied to
+`candidates.csv` only. Each head scores one query against the gallery; serving does not
+rank-average across the test query batch.
 
 `notebooks/eva02/refusal_analysis.ipynb` compares the heads and ensembles on EVA02 5-fold OOF.
+`notebooks/eva02/inference_profile.ipynb` measures the contest extract() cycle (latency_b1, FPS, VRAM, 2 GiB weights).
 
 ## Pretrained weights and offline use
 
@@ -639,17 +702,43 @@ Copy the resulting `weights/` directory to the training machine and set the corr
 access. Each download is pinned by file SHA-256 (and a Hub commit for RADIO and LLM2CLIP). A
 checksum mismatch after download is an error.
 
-Contest serving weights are not these Hub snapshots. Put the submitted Lightning checkpoint and
-optional refusal CatBoost file under `weights/finetuned/` and record checksums:
+Contest serving weights are not these Hub snapshots. Export EMA tensors from a Lightning training
+checkpoint into a compact `.pt`, fit the CatBoost refusal head on EVA02 5-fold OOF packs, then
+record checksums:
+
+```bash
+.venv/bin/python scripts/export_serving.py \
+  --checkpoint runs/cv/eva02_trial23/fold0/checkpoints/epoch025.ckpt \
+  --output weights/finetuned/eva02.pt \
+  --weights ema \
+  --sha256
+.venv/bin/python scripts/export_refusal.py \
+  --cv runs/cv/eva02_trial23 \
+  --output weights/finetuned/eva02_catboost.cbm \
+  --sha256
+```
+
+`--checkpoint` defaults to the path stored in `runs/cv/eva02_trial23/fold0/val/metrics.json`.
+The serving `.pt` is `format=reid-serving`: Hydra `cfg`, ReIDModel `state_dict`, and the exported
+weight kind. Optimizer, loops, and the unused raw copy are dropped so the file stays under the
+2 GiB contest cap. The CatBoost file is fit on all five OOF folds with the same recipe as
+`notebooks/eva02/refusal_analysis.ipynb` (`iterations=200`, `depth=4`, embeddings in the feature
+vector). `--sha256` rewrites `weights/finetuned/SHA256SUMS`. `.cbm` is outside the official 2 GiB
+suffix glob.
 
 ```text
 weights/finetuned/
 ├── SHA256SUMS
-├── model.ckpt
+├── eva02.pt
 └── eva02_catboost.cbm
 ```
 
-Those binaries are Git LFS objects (see `.gitattributes`). After adding or replacing them:
+`eva02.pt` is the eval/Docker checkpoint. `eva02_catboost.cbm` is required for
+`refusal=eva02_model` and `refusal=eva02_ensemble` (the Docker default). The accept threshold
+`0.4329` stays in `configs/refusal/`; it is not retuned at export.
+
+Those binaries are Git LFS objects (see `.gitattributes`). After adding or replacing them without
+`--sha256` on the exporter:
 
 ```bash
 .venv/bin/python scripts/verify_weights.py --root weights/finetuned --write
@@ -661,12 +750,13 @@ no payload files; the Docker build verifies the tree.
 ## Contest Docker image
 
 The image may use the network during `docker build`. `docker run` is fully offline:
-`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and Compose `network_mode: none`. Python packages are
+`HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and Compose `network_mode: none`. GPU access is
+`--gpus all` (Compose `gpus: all`). Python packages are
 installed from `requirements/runtime.txt` with `pip install --require-hashes` on public PyPI. That
 file is the frozen export of `uv.lock`; regenerate it with `make lock`. The lab `uv.lock` registry
 URL is not used at image build time.
 
-The serving checkpoint is copied into the image from `weights/finetuned/`. Do not mount a host
+The serving `.pt` is copied into the image from `weights/finetuned/`. Do not mount a host
 `weights/` directory over `/app/weights`, or the baked files are hidden. Mount only contest data and
 the output directory:
 
@@ -675,13 +765,25 @@ docker compose build
 DATA_ROOT=./data OUTPUT_DIR=./runs/submission docker compose run --rm retrieval
 ```
 
-The default command is:
+Equivalent:
+
+```bash
+docker run --gpus all --network none \
+  -v "$PWD/data:/data:ro" \
+  -v "$PWD/runs/submission:/runs/submission" \
+  retrieval
+```
+
+One command writes `submission.csv`, `embeddings.npy`, and `candidates.csv` from the mounted
+`images/` plus query/gallery CSV. The default command is:
 
 ```text
-checkpoint=/app/weights/finetuned/model.ckpt
+checkpoint=/app/weights/finetuned/eva02.pt
 data.root=/data
 eval.split=test
 eval.output_dir=/runs/submission
+eval.top_k=10
+refusal=eva02_ensemble
 ```
 
 Override `CHECKPOINT` or pass extra Hydra flags after `retrieval`. Eval loads
@@ -873,17 +975,18 @@ extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: Grad-CAM, HiResCAM, LayerCAM, EigenCAM, attention rollout, Chefer
-notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`)
+notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`), inference profile (`eva02/inference_profile.ipynb`)
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
+profiling/      Contest extract() timing, weight inventory vs 2 GiB, VRAM, determinism
 refusal/        Open-set accept/refuse: cosine threshold, CatBoost, TabM, eval-time mask, contest F1/TNR/PR-AUC
 requirements/   Hashed pip freeze used by the contest Docker image
-scripts/        Dataset audit, fold creation, weight download, checksum verification, model checks, zero-shot probes, and CV aggregation
+scripts/        Dataset audit, fold creation, weight download, serving `.pt` / CatBoost export, checksum verification, model checks, zero-shot probes, and CV aggregation
 tests/          CPU/offline unit, integration, configuration, and entrypoint tests
 third_party/    Vendored upstream implementations
 weights/        Local Hub snapshots (gitignored) and `finetuned/` serving artifacts (Git LFS)
 Dockerfile      Offline contest serving image
 pretrain.py     Hydra pretraining entrypoint on extra data
 train.py        Hydra training entrypoint
-eval.py         Checkpoint-driven evaluation and retrieval entrypoint
+eval.py         Serving `.pt` / Lightning checkpoint evaluation and retrieval entrypoint
 ```

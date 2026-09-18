@@ -97,26 +97,68 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
     return effective
 
 
+SERVING_FORMAT = "reid-serving"
+
+
+def saved_cfg(blob):
+    if blob.get("format") == SERVING_FORMAT:
+        return blob["cfg"]
+    if "hyper_parameters" not in blob:
+        raise ValueError("Unrecognized checkpoint")
+    return blob["hyper_parameters"]["cfg"]
+
+
+def select_state(blob, choice):
+    if blob.get("format") == SERVING_FORMAT:
+        exported = str(blob.get("weights", "raw"))
+        if choice == "auto":
+            choice = exported
+        if choice != exported:
+            raise ValueError(f"Serving payload contains {exported} weights, requested {choice}")
+        state = blob.get("state_dict") or {}
+        if not state:
+            raise ValueError("Serving payload is missing state_dict")
+        return state, choice
+    if "hyper_parameters" not in blob:
+        raise ValueError("Unrecognized checkpoint")
+    if choice == "auto":
+        choice = blob.get("validation_weights", "raw")
+    if choice == "ema":
+        if "ema" not in blob:
+            raise ValueError("EMA weights requested but absent from checkpoint")
+        return blob["ema"]["shadow"], choice
+    if choice == "raw":
+        state = {k.removeprefix("model."): v for k, v in blob["state_dict"].items() if k.startswith("model.")}
+        if not state:
+            raise ValueError("Checkpoint has no model.* weights")
+        return state, choice
+    raise ValueError("eval.weights must be auto/raw/ema")
+
+
+def build_serving_payload(blob, weights="ema"):
+    if blob.get("format") == SERVING_FORMAT:
+        raise ValueError("Input is already a serving payload")
+    state, kind = select_state(blob, weights)
+    return {
+        "format": SERVING_FORMAT,
+        "cfg": blob["hyper_parameters"]["cfg"],
+        "state_dict": state,
+        "weights": kind,
+        "label_map": blob.get("label_map"),
+        "data_fingerprint": blob.get("data_fingerprint"),
+        "split_fingerprint": blob.get("split_fingerprint"),
+        "validation_weights": blob.get("validation_weights", kind),
+    }
+
+
 def load_model(cfg, override_items: list[str] | None = None):
     if not cfg.checkpoint:
-        raise ValueError("Pass checkpoint=/path/to/checkpoint.ckpt")
+        raise ValueError("Pass checkpoint=/path/to/weights.pt")
     checkpoint = torch.load(cfg.checkpoint, map_location="cpu", weights_only=False)
-    saved = OmegaConf.create(checkpoint["hyper_parameters"]["cfg"])
+    saved = OmegaConf.create(saved_cfg(checkpoint))
     effective = overlay_eval_config(saved, cfg, override_items)
     model = ReIDModel(effective, initialize_pretrained=False)
-    choice = cfg.eval.weights
-    if choice == "auto":
-        choice = checkpoint.get("validation_weights", "raw")
-    if choice == "ema":
-        if "ema" not in checkpoint:
-            raise ValueError("EMA weights requested but absent from checkpoint")
-        state = checkpoint["ema"]["shadow"]
-    elif choice == "raw":
-        state = {
-            k.removeprefix("model."): v for k, v in checkpoint["state_dict"].items() if k.startswith("model.")
-        }
-    else:
-        raise ValueError("eval.weights must be auto/raw/ema")
+    state, choice = select_state(checkpoint, cfg.eval.weights)
     model.load_state_dict(state, strict=True)
     return model, effective, checkpoint, choice
 

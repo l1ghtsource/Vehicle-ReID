@@ -173,6 +173,46 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     with pytest.raises(ValueError, match="auto/raw/ema"):
         eval_module.load_model(cfg)
 
+    cfg.eval.weights = "raw"
+    torch.save({"state_dict": {"other": torch.zeros(1)}}, path)
+    with pytest.raises(ValueError, match="Unrecognized"):
+        eval_module.load_model(cfg)
+    empty_raw = checkpoint_for(cfg)
+    empty_raw["state_dict"] = {"other": torch.zeros(1)}
+    torch.save(empty_raw, path)
+    with pytest.raises(ValueError, match="model"):
+        eval_module.load_model(cfg)
+
+    lightning = checkpoint_for(cfg)
+    lightning["ema"] = {"shadow": {"weight": torch.ones(1)}}
+    payload = eval_module.build_serving_payload(lightning, "ema")
+    assert payload["format"] == eval_module.SERVING_FORMAT
+    torch.save(payload, path)
+    cfg.eval.weights = "auto"
+    _, _, blob, choice = eval_module.load_model(cfg)
+    assert choice == "ema" and blob["format"] == eval_module.SERVING_FORMAT
+    cfg.eval.weights = "raw"
+    with pytest.raises(ValueError, match="requested"):
+        eval_module.load_model(cfg)
+    with pytest.raises(ValueError, match="already a serving"):
+        eval_module.build_serving_payload(payload, "ema")
+    with pytest.raises(ValueError, match="Unrecognized"):
+        eval_module.build_serving_payload({"state_dict": {"weight": torch.ones(1)}}, "ema")
+    unlabeled = dict(payload)
+    unlabeled.pop("weights")
+    torch.save(unlabeled, path)
+    cfg.eval.weights = "auto"
+    _, _, _, choice = eval_module.load_model(cfg)
+    assert choice == "raw"
+    empty_serve = dict(payload)
+    empty_serve["state_dict"] = {}
+    torch.save(empty_serve, path)
+    cfg.eval.weights = "ema"
+    with pytest.raises(ValueError, match="missing state_dict"):
+        eval_module.load_model(cfg)
+    torch.save(checkpoint, path)
+    cfg.eval.weights = "ema"
+
     saved = OmegaConf.to_container(cfg, resolve=True)
     if not isinstance(saved, dict):
         raise TypeError("Expected mapping checkpoint config")
@@ -340,6 +380,8 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     refuse_meta = json.loads((tmp_path / "val_refuse/metrics.json").read_text())
     assert refused.empty
     assert len(kept) == refuse_meta["n_query"]
+    assert "confidence" not in kept.columns
+    assert list(kept.columns)[:1] == ["query_id"]
     assert refuse_meta["refusal"]["kind"] == "threshold"
     assert refuse_meta["refusal"]["n_refuse"] == refuse_meta["n_query"]
     data_cfg.refusal.kind = "model"

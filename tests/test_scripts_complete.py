@@ -15,6 +15,8 @@ import scripts.aggregate_cv as aggregate_cv
 import scripts.audit_data as audit_data
 import scripts.check_backbone as check_backbone
 import scripts.download_weights as download_weights
+import scripts.export_refusal as export_refusal
+import scripts.export_serving as export_serving
 import scripts.prepare_folds as prepare_folds
 import scripts.zero_shot as zero_shot
 
@@ -302,3 +304,130 @@ def test_prepare_folds_body_and_main_guard(data_cfg, monkeypatch):
     monkeypatch.setattr("hydra.main", decorator)
     runpy.run_module("scripts.prepare_folds", run_name="__main__")
     assert called == ["main"]
+
+
+def test_export_serving_payload(tmp_path, monkeypatch):
+    source = tmp_path / "train.ckpt"
+    target = tmp_path / "out" / "eva02.pt"
+    blob = {
+        "hyper_parameters": {"cfg": {"seed": 1}},
+        "state_dict": {"model.weight": torch.ones(2), "skip": torch.zeros(1)},
+        "ema": {"shadow": {"weight": torch.ones(2) * 2}},
+        "validation_weights": "ema",
+        "label_map": {1: 0},
+    }
+    torch.save(blob, source)
+    written = export_serving.export_serving(source, target, "ema")
+    loaded = torch.load(written, map_location="cpu", weights_only=False)
+    assert loaded["format"] == "reid-serving"
+    assert torch.equal(loaded["state_dict"]["weight"], torch.ones(2) * 2)
+    raw = export_serving.export_serving(source, tmp_path / "raw.pt", "raw")
+    raw_blob = torch.load(raw, map_location="cpu", weights_only=False)
+    assert torch.equal(raw_blob["state_dict"]["weight"], torch.ones(2))
+    with pytest.raises(ValueError, match="already a serving"):
+        export_serving.export_serving(written, tmp_path / "again.pt", "ema")
+    with pytest.raises(FileNotFoundError):
+        export_serving.source_checkpoint(tmp_path / "missing.ckpt")
+    monkeypatch.setattr(export_serving, "DEFAULT_METRICS", tmp_path / "missing.json")
+    with pytest.raises(ValueError, match="Pass --checkpoint"):
+        export_serving.source_checkpoint(None)
+    metrics = tmp_path / "metrics.json"
+    metrics.write_text(json.dumps({"checkpoint": str(tmp_path / "absent.ckpt")}))
+    monkeypatch.setattr(export_serving, "DEFAULT_METRICS", metrics)
+    with pytest.raises(FileNotFoundError):
+        export_serving.source_checkpoint(None)
+    metrics.write_text(json.dumps({"checkpoint": str(source)}))
+    assert export_serving.source_checkpoint(None) == source
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_serving",
+            "--checkpoint",
+            str(source),
+            "--output",
+            str(tmp_path / "cli.pt"),
+            "--weights",
+            "auto",
+            "--sha256",
+        ],
+    )
+    export_serving.main()
+    assert (tmp_path / "cli.pt").is_file()
+    assert "cli.pt" in (tmp_path / "SHA256SUMS").read_text()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["export_serving", "--checkpoint", str(source), "--output", str(tmp_path / "main.pt")],
+    )
+    runpy.run_module("scripts.export_serving", run_name="__main__")
+    assert (tmp_path / "main.pt").is_file()
+
+
+def _write_refusal_fold(cv: Path, fold: int) -> None:
+    val = cv / f"fold{fold}" / "val"
+    val.mkdir(parents=True)
+    ids = [f"{fold}a", f"{fold}b", f"{fold}c", f"{fold}d"]
+    (val / "oof.csv").write_text("image_id\n" + "\n".join(ids) + "\n")
+    (val / "query.csv").write_text(f"image_id,vehicle_id\n{ids[0]},1\n{ids[2]},2\n")
+    (val / "gallery.csv").write_text(f"image_id,vehicle_id\n{ids[1]},1\n{ids[3]},2\n")
+    emb = np.eye(4, 8, dtype=np.float32)
+    emb[1] = emb[0] + 0.05
+    emb[3] = emb[2] + 0.05
+    np.save(val / "embeddings.npy", emb)
+
+
+def test_export_refusal_head(tmp_path, monkeypatch):
+    cv = tmp_path / "cv"
+    _write_refusal_fold(cv, 0)
+    _write_refusal_fold(cv, 1)
+    target = tmp_path / "heads" / "eva02_catboost.cbm"
+    written = export_refusal.export_refusal(cv, target, seed=0, n_folds=2, k=2)
+    assert written.is_file()
+    features, labels = export_refusal.collect_features(cv, n_folds=2, k=2)
+    assert features.shape[0] == len(labels) == 8
+    with pytest.raises(ValueError, match="n_folds"):
+        export_refusal.collect_features(cv, n_folds=0)
+    with pytest.raises(FileNotFoundError):
+        export_refusal.load_pack(tmp_path / "missing")
+    _write_refusal_fold(tmp_path / "orphan", 0)
+    packed = tmp_path / "orphan" / "fold0" / "val"
+    (packed / "query.csv").write_text("image_id,vehicle_id\nmissing,1\n0c,2\n")
+    with pytest.raises(ValueError, match="missing image_id"):
+        export_refusal.load_pack(packed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--cv",
+            str(cv),
+            "--output",
+            str(tmp_path / "cli.cbm"),
+            "--n-folds",
+            "1",
+            "--k",
+            "2",
+            "--sha256",
+        ],
+    )
+    export_refusal.main()
+    assert (tmp_path / "cli.cbm").is_file()
+    assert "cli.cbm" in (tmp_path / "SHA256SUMS").read_text()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--cv",
+            str(cv),
+            "--output",
+            str(tmp_path / "main.cbm"),
+            "--n-folds",
+            "1",
+            "--k",
+            "2",
+        ],
+    )
+    runpy.run_module("scripts.export_refusal", run_name="__main__")
+    assert (tmp_path / "main.cbm").is_file()

@@ -43,7 +43,14 @@ def candidate_frame(query_ids, gallery_ids, confidences, accept=None):
             if not gid or not np.isfinite(conf):
                 continue
             rows.append((str(qid), gid, float(conf)))
-    return pd.DataFrame(rows, columns=pd.Index(list(CANDIDATE_COLUMNS)))
+    frame = pd.DataFrame(rows, columns=pd.Index(list(CANDIDATE_COLUMNS)))
+    if len(frame):
+        frame = frame.sort_values(
+            ["query_id", "confidence"],
+            ascending=[True, False],
+            kind="mergesort",
+        ).reset_index(drop=True)
+    return frame
 
 
 def write_candidates(path, query_ids, gallery_ids, confidences, accept=None):
