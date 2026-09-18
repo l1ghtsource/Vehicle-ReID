@@ -15,7 +15,7 @@ resume: null
 # Loads model.* weights from a pretrain.py checkpoint. Mutually exclusive with resume.
 init_checkpoint: null
 data:
-  root: /data/projects/ryzhichkin/ReID/data
+  root: data
   train_csv: ${data.root}/train.csv
   query_csv: ${data.root}/test_query.csv
   gallery_csv: ${data.root}/test_gallery.csv

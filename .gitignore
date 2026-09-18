@@ -50,5 +50,5 @@ htmlcov/
 .DS_Store
 Thumbs.db
 .idea/
-.vscode/
+.vode/
 .ipynb_checkpoints/
