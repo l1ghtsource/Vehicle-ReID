@@ -1,5 +1,6 @@
 # @package _global_
-# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe (5-fold OOF mAP 0.857).
+# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe
+# (5-fold OOF mAP 0.857, mAP@10 0.845).
 # Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
 defaults:
   - override /model: llm2clip

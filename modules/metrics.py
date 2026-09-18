@@ -15,7 +15,7 @@ def retrieval_metrics(
     qids, gids = np.asarray(qids), np.asarray(gids)
     if d.shape != (len(qids), len(gids)) or not np.isfinite(d).all():
         raise ValueError("Invalid retrieval distance matrix")
-    aps, inps, hits = [], [], {k: [] for k in ranks}
+    aps, aps10, inps, hits = [], [], [], {k: [] for k in ranks}
     no_positive = 0
     for i, row in enumerate(d):
         keep = np.ones(len(gids), dtype=bool)
@@ -36,7 +36,13 @@ def retrieval_metrics(
             no_positive += 1
             continue
         found = np.flatnonzero(relevant)
-        aps.append(np.mean(np.arange(1, len(found) + 1) / (found + 1)))
+        aps.append(np.mean((np.arange(len(found)) + 1) / (found + 1)))
+        hits10 = found[found < 10]
+        cap = min(len(found), 10)
+        if hits10.size == 0:
+            aps10.append(0.0)
+        else:
+            aps10.append(float(np.sum((np.arange(len(hits10)) + 1) / (hits10 + 1)) / cap))
         inps.append(len(found) / (found[-1] + 1))
         for k in ranks:
             hits[k].append(float(relevant[:k].any()))
@@ -44,6 +50,7 @@ def retrieval_metrics(
         raise ValueError("No query has a valid gallery positive; cannot report mAP")
     return {
         "mAP": float(np.mean(aps)),
+        "mAP@10": float(np.mean(aps10)),
         "mINP": float(np.mean(inps)),
         **{f"Rank-{k}": float(np.mean(v)) for k, v in hits.items()},
         "evaluated_queries": len(aps),

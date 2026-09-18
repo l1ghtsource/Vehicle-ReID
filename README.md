@@ -283,8 +283,8 @@ Experiment presets provide larger ready-to-run configurations:
 ```
 
 `current_best_tuned` is LLM2CLIP EVA02-L-14-336 trained with the Optuna `convnext_base_all` trial 23
-recipe (5-fold OOF mAP 0.857): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP, linear schedule,
-EMA. Pass `model=` to reuse the recipe with another backbone.
+recipe (5-fold OOF mAP 0.857, mAP@10 0.845): 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP,
+linear schedule, EMA. Pass `model=` to reuse the recipe with another backbone.
 
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
@@ -417,14 +417,15 @@ scripts/zero_shot_weights.sh cuda:2
 
 Measured out-of-the-box retrieval on 100% of competition `train.csv` (1541 queries, 5550 gallery
 images, cross-camera protocol, no TTA or reranking). These scores are a pretrained-backbone probe,
-not identity-disjoint fold OOF:
+not identity-disjoint fold OOF. `mAP` is full-gallery average precision; `mAP@10` is the official
+submission metric (top-10, denominator `min(n_pos, 10)`).
 
-| Model | mAP | Rank-1 | Rank-5 | Rank-10 | mINP |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| DINOv3 ConvNeXt Base | 0.173 | 0.168 | 0.294 | 0.363 | 0.117 |
-| DINOv3 ConvNeXt Large | 0.189 | 0.175 | 0.323 | 0.412 | 0.136 |
-| RADIO C-RADIOv4-SO400M | 0.171 | 0.176 | 0.295 | 0.360 | 0.112 |
-| LLM2CLIP EVA02-L-14-336 | 0.334 | 0.352 | 0.519 | 0.619 | 0.236 |
+| Model | mAP | mAP@10 | Rank-1 | Rank-5 | Rank-10 | mINP |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| DINOv3 ConvNeXt Base | 0.173 | 0.146 | 0.168 | 0.294 | 0.363 | 0.117 |
+| DINOv3 ConvNeXt Large | 0.189 | 0.158 | 0.175 | 0.323 | 0.412 | 0.136 |
+| RADIO C-RADIOv4-SO400M | 0.171 | 0.145 | 0.176 | 0.295 | 0.360 | 0.112 |
+| LLM2CLIP EVA02-L-14-336 | 0.334 | 0.301 | 0.352 | 0.519 | 0.619 | 0.236 |
 
 ### Test-time augmentation
 
@@ -532,7 +533,8 @@ The evaluation directory contains:
 - `metrics.json`: run metadata and validation metrics when labels are available.
 - `config.yaml`: resolved evaluation configuration.
 
-Validation reports mAP, mINP, and configured CMC ranks. Queries with no valid positive are counted
+Validation reports full-gallery mAP (checkpoint selection and Optuna), official mAP@10 over the
+submission top-10, mINP, and configured CMC ranks. Queries with no valid positive are counted
 and excluded from metric averages; evaluation fails if no query has a valid positive.
 
 ## Pretrained weights and offline use

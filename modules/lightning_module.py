@@ -238,7 +238,7 @@ class ReIDModule(L.LightningModule):
                 exclude_all_same_camera=self.cfg.data.validation.exclude_all_same_camera,
             )
             for k, v in metrics.items():
-                self.log(f"val/{k}", float(v), sync_dist=False, prog_bar=k in {"mAP", "Rank-1"})
+                self.log(f"val/{k}", float(v), sync_dist=False, prog_bar=k in {"mAP", "mAP@10", "Rank-1"})
         finally:
             self.val_outputs.clear()
             if self.ema_context:

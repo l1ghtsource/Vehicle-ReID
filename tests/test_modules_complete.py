@@ -271,6 +271,7 @@ def test_metrics_validation_and_camera_policy():
         exclude_all_same_camera=False,
     )
     assert metrics["mAP"] == 1.0
+    assert metrics["mAP@10"] == 1.0
 
 
 def test_ema_and_awp_all_paths():
