@@ -19,6 +19,7 @@ to the dataset and label mapping that produced them.
 - Test-time augmentation over flips, rotations, scales, and bounding-box context of a single image.
 - Streaming retrieval postproc: gallery-side aggregation and per-query rerank. AQE is OOF-only.
 - Open-set refusal: cosine threshold, CatBoost, and TabM on retrieval-set features.
+- EfficientLoFTR pair matching as a retrieval visualizer and top-k verifier.
 - Reproducible GroupKFold splits with no vehicle identity overlap between train and validation.
 - CPU/offline test suite with 100% line coverage for first-party Python code.
 - Contest serving file is a compact EMA `.pt` exported from a Lightning checkpoint.
@@ -505,6 +506,35 @@ query_maps, gallery_maps, cosine = interpret_pair(
 )
 canvas = overlay(crop_hwc, query_maps[0])
 ```
+
+### Pair matching (EfficientLoFTR)
+
+`matching/` runs detector-free semi-dense correspondence on a query/gallery crop pair using the
+local Hugging Face checkpoint `weights/efficientloftr`. The embedding ranker still decides the
+shortlist. Matching is a second opinion on that shortlist: how many keypoints correspond, how
+confident those correspondences are, and how many survive a homography RANSAC.
+
+| Output | Meaning |
+| --- | --- |
+| `n_matches` | Correspondences above the matcher threshold (default 0.2) |
+| `score_sum` / `score_mean` | Sum / mean of those correspondence scores |
+| `n_inliers` / `inlier_ratio` | RANSAC homography inliers; a geometric check that the matches are consistent |
+
+`reorder_head` re-sorts only the cosine top-`k`. `hybrid_head` min-max mixes cosine and a match
+statistic inside that head. The matcher is not applied to the full gallery.
+
+```python
+from matching import draw_matches, load_matcher, match_pair, match_stats, reorder_head
+
+processor, matcher = load_matcher("weights/efficientloftr", device="cuda:2")
+pair = match_pair(processor, matcher, query_crop, gallery_crop, threshold=0.2)
+stats = match_stats(pair["keypoints0"], pair["keypoints1"], pair["scores"])
+canvas = draw_matches(query_crop, gallery_crop, pair["keypoints0"], pair["keypoints1"], pair["scores"])
+order = reorder_head(cosine_order, inlier_counts, k=10)
+```
+
+Local weights only (`local_files_only=True`). The checkpoint is gitignored under `weights/` like
+other Hub snapshots; it is not part of contest serving.
 
 ### Embedding robustness (post-hoc)
 
@@ -1018,7 +1048,8 @@ extra_data/     Optional external identity-labeled crops for pretraining
 models/         Backbone adapters, pooling layers, and embedding model
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: cosine Grad-Sim, Grad-Attention rollout, patch occlusion, CAM, Chefer
-notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`), inference profile (`eva02/inference_profile.ipynb`)
+matching/       EfficientLoFTR pair matching, homography inliers, cosine top-k rerank
+notebooks/      EDA plus EVA02 OOF (`eva02/oof_analysis.ipynb`), interpretation (`eva02/interp.ipynb`), matching (`eva02/matching.ipynb`), robustness (`eva02/posthoc_stability.ipynb`), open-set refusal (`eva02/refusal_analysis.ipynb`), inference profile (`eva02/inference_profile.ipynb`)
 posthoc/        Query-corruption robustness: embedding cosine, neighbor overlap, AP shift
 postproc/       Retrieval expansion, aggregation, and reranking
 profiling/      Contest extract() timing, weight inventory vs 2 GiB, VRAM, determinism
