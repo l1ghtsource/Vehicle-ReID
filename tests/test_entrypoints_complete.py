@@ -379,6 +379,22 @@ def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     assert bool(stream_cfg.postproc.streaming) is False
 
 
+def test_load_compatible_state_ignores_mask_token():
+    class Masked(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.zeros(1))
+            self.mask_token = nn.Parameter(torch.zeros(1))
+
+    model = Masked()
+    eval_module.load_compatible_state(model, {"weight": torch.ones(1)})
+    assert torch.equal(model.weight, torch.ones(1))
+    with pytest.raises(ValueError, match="mismatch"):
+        eval_module.load_compatible_state(model, {"weight": torch.ones(1), "extra": torch.ones(1)})
+    assert eval_module.load_result_keys(SimpleNamespace()) == ([], [])
+    assert eval_module.load_result_keys((["a"], ["b"])) == (["a"], ["b"])
+
+
 def test_refusal_serving_presets():
     config_dir = str(Path(__file__).resolve().parents[1] / "configs")
     with initialize_config_dir(version_base="1.3", config_dir=config_dir):
@@ -389,13 +405,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7011)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7210)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.6719)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.6839)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7011)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.6719)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7210)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.6839)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 
@@ -567,6 +583,7 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
         raise TypeError("Expected mapping tta config")
     data["root"] = old_root
     data["train_csv"] = f"{old_root}/train.csv"
+    data["val_source_csv"] = f"{old_root}/train.csv"
     data["query_csv"] = f"{old_root}/test_query.csv"
     data["gallery_csv"] = f"{old_root}/test_gallery.csv"
     data["image_dir"] = f"{old_root}/images"
@@ -614,6 +631,7 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
     assert str(written.data.gallery_csv) == str(Path(data_cfg.data.root) / "test_gallery.csv")
     assert str(written.data.image_dir) == str(Path(data_cfg.data.root) / "images")
     assert str(written.data.train_csv) == str(Path(data_cfg.data.root) / "train.csv")
+    assert str(written.data.val_source_csv) == str(Path(data_cfg.data.root) / "train.csv")
     assert not str(written.data.query_csv).startswith(old_root)
     assert (out / "submission.csv").is_file()
     cand = pd.read_csv(out / "candidates.csv")

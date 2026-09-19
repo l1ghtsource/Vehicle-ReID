@@ -22,7 +22,7 @@ from modules.metrics import retrieval_metrics
 from postproc import postprocess
 from refusal import refusal_accept, write_candidates
 
-DATA_ROOT_PATHS = ("train_csv", "query_csv", "gallery_csv", "image_dir")
+DATA_ROOT_PATHS = ("train_csv", "val_source_csv", "query_csv", "gallery_csv", "image_dir")
 
 
 def task_overrides() -> list[str]:
@@ -153,6 +153,23 @@ def build_serving_payload(blob, weights="ema"):
     }
 
 
+def load_result_keys(result):
+    missing = getattr(result, "missing_keys", None)
+    unexpected = getattr(result, "unexpected_keys", None)
+    if missing is not None and unexpected is not None:
+        return list(missing), list(unexpected)
+    if isinstance(result, tuple) and len(result) == 2:
+        return list(result[0]), list(result[1])
+    return [], []
+
+
+def load_compatible_state(model, state):
+    missing, unexpected = load_result_keys(model.load_state_dict(state, strict=False))
+    missing = [key for key in missing if not str(key).endswith("mask_token")]
+    if missing or unexpected:
+        raise ValueError(f"Checkpoint model mismatch: missing={missing}, unexpected={unexpected}")
+
+
 def load_model(cfg, override_items: list[str] | None = None):
     if not cfg.checkpoint:
         raise ValueError("Pass checkpoint=/path/to/weights.pt")
@@ -161,7 +178,7 @@ def load_model(cfg, override_items: list[str] | None = None):
     effective = overlay_eval_config(saved, cfg, override_items)
     model = ReIDModel(effective, initialize_pretrained=False)
     state, choice = select_state(checkpoint, cfg.eval.weights)
-    model.load_state_dict(state, strict=True)
+    load_compatible_state(model, state)
     return model, effective, checkpoint, choice
 
 

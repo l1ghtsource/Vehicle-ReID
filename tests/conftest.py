@@ -52,6 +52,7 @@ def data_cfg(cfg, tmp_path):
         )
     cfg.data.root = str(root)
     cfg.data.train_csv = str(root / "train.csv")
+    cfg.data.val_source_csv = str(root / "train.csv")
     cfg.data.query_csv = str(root / "test_query.csv")
     cfg.data.gallery_csv = str(root / "test_gallery.csv")
     cfg.data.image_dir = str(images)

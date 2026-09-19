@@ -7,8 +7,8 @@ import torch
 from eval import build_serving_payload
 from scripts.verify_weights import write_sha256sums
 
-DEFAULT_SUMMARY = Path("runs/full/eva02_trial23/run_summary.json")
-DEFAULT_METRICS = Path("runs/cv/eva02_trial23/fold0/val/metrics.json")
+DEFAULT_SUMMARY = Path("runs/full/pseudo_iter001_mcs4/run_summary.json")
+DEFAULT_METRICS = Path("runs/cv/pseudo_iter001_mcs4/fold0/val/metrics.json")
 DEFAULT_OUTPUT = Path("weights/finetuned/eva02.pt")
 
 

@@ -510,6 +510,34 @@ def test_load_initial_weights_choices_and_mismatches(tmp_path):
     )
     assert train.load_initial_weights(LossesOnly(), path) == "raw"
 
+    torch.save(
+        {
+            "format": train.SERVING_FORMAT,
+            "state_dict": dict(module.model.state_dict()),
+            "weights": "ema",
+        },
+        path,
+    )
+    assert train.load_initial_weights(module, path) == "ema"
+    torch.save({"format": train.SERVING_FORMAT, "state_dict": {}}, path)
+    with pytest.raises(ValueError, match="missing state_dict"):
+        train.load_initial_weights(module, path)
+
+    class Masked(InitModule):
+        def __init__(self):
+            super().__init__()
+            self.model.mask_token = nn.Parameter(torch.zeros(1, 1))
+
+    torch.save(
+        {
+            "format": train.SERVING_FORMAT,
+            "state_dict": dict(module.model.state_dict()),
+            "weights": "raw",
+        },
+        path,
+    )
+    assert train.load_initial_weights(Masked(), path) == "raw"
+
 
 def test_train_main_init_checkpoint(cfg, tmp_path, monkeypatch):
     class TrackingModule(InitModule):

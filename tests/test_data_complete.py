@@ -15,9 +15,12 @@ from torch.utils.data import DistributedSampler, RandomSampler
 from augmentations.pipeline import Pipeline, build_transforms
 from dataset.datamodule import ReIDDataModule
 from dataset.folds import (
+    check_fold_indices,
     ensure_folds,
     fingerprint,
+    holdout_identities,
     make_folds,
+    optional_csv_path,
     query_gallery_split,
     read_annotations,
     split_fingerprint,
@@ -91,6 +94,37 @@ def test_make_folds_and_query_edge_cases():
         make_folds(frame, group_column="camera_id")
     with pytest.raises(ValueError):
         make_folds(frame, n_folds=4)
+    with pytest.raises(ValueError, match="shares no identities"):
+        make_folds(frame, val_identities={99})
+    orig = pd.DataFrame(
+        [
+            {
+                "image_id": f"{vehicle}_{shot}",
+                "vehicle_id": vehicle,
+                "camera_id": shot % 2,
+                "x": 0,
+                "y": 0,
+                "w": 1,
+                "h": 1,
+            }
+            for vehicle in range(10)
+            for shot in range(2)
+        ]
+    )
+    extra = pd.concat(
+        [
+            orig,
+            pd.DataFrame(
+                [{"image_id": "p0", "vehicle_id": 100, "camera_id": -1, "x": 0, "y": 0, "w": 1, "h": 1}]
+            ),
+        ],
+        ignore_index=True,
+    )
+    split = make_folds(extra, val_identities=set(range(10)))
+    assert set(split.loc[split.vehicle_id == 100, "fold"]) == {-1}
+    assert set(split.loc[split.vehicle_id < 10, "fold"]) == set(range(5))
+    with pytest.raises(ValueError, match="indices"):
+        check_fold_indices([0, 1, 2, 3, 4, 5], 5)
     with pytest.raises(ValueError):
         query_gallery_split(frame)
 
@@ -143,6 +177,78 @@ def test_ensure_folds_manifest_validation(data_cfg):
     invalid.to_csv(path, index=False)
     with pytest.raises(ValueError, match="indices"):
         ensure_folds(data_cfg)
+
+
+def test_ensure_folds_keeps_pseudo_identities_in_train(data_cfg, tmp_path):
+    orig_csv = Path(data_cfg.data.train_csv)
+    orig = pd.read_csv(orig_csv, dtype={"image_id": str})
+    extra = orig.iloc[[0]].copy()
+    extra["image_id"] = "pseudo_0"
+    extra["vehicle_id"] = int(orig.vehicle_id.max()) + 1
+    extra["camera_id"] = -1
+    merged = pd.concat([orig, extra], ignore_index=True)
+    merged_csv = tmp_path / "merged.csv"
+    merged.to_csv(merged_csv, index=False)
+    data_cfg.data.train_csv = str(merged_csv)
+    data_cfg.data.val_source_csv = str(orig_csv)
+    data_cfg.data.folds_file = str(tmp_path / "pseudo_folds.csv")
+    created = ensure_folds(data_cfg)
+    assert set(created.loc[created.image_id == "pseudo_0", "fold"]) == {-1}
+    assert set(created.loc[created.image_id != "pseudo_0", "fold"]) == set(range(5))
+    pd.testing.assert_frame_equal(created, ensure_folds(data_cfg))
+
+    data_cfg.data.val_source_csv = None
+    assert holdout_identities(data_cfg, merged) is None
+    assert optional_csv_path("") is None
+    assert optional_csv_path("null") is None
+    assert optional_csv_path("None") is None
+    empty = orig.iloc[[0]].copy()
+    empty["vehicle_id"] = 99_999
+    empty_csv = tmp_path / "empty_holdout.csv"
+    empty.to_csv(empty_csv, index=False)
+    data_cfg.data.val_source_csv = str(empty_csv)
+    with pytest.raises(ValueError, match="shares no identities"):
+        holdout_identities(data_cfg, orig)
+
+    data_cfg.data.val_source_csv = str(orig_csv)
+    bad = created.copy()
+    bad.loc[bad.image_id == "pseudo_0", "fold"] = 0
+    bad.to_csv(data_cfg.data.folds_file, index=False)
+    with pytest.raises(ValueError, match="fold=-1"):
+        ensure_folds(data_cfg)
+    bad = created.copy()
+    counts = created.loc[created.fold >= 0].groupby("fold").vehicle_id.nunique()
+    fold = int(counts[counts >= 2].index[0])
+    identity = int(created.loc[created.fold == fold, "vehicle_id"].iloc[0])
+    bad.loc[bad.vehicle_id == identity, "fold"] = -1
+    bad.to_csv(data_cfg.data.folds_file, index=False)
+    with pytest.raises(ValueError, match="Holdout"):
+        ensure_folds(data_cfg)
+
+
+def test_datamodule_val_excludes_pseudo_identities(data_cfg, tmp_path):
+    orig_csv = Path(data_cfg.data.train_csv)
+    orig = pd.read_csv(orig_csv, dtype={"image_id": str})
+    extra = orig.iloc[:4].copy().reset_index(drop=True)
+    extra["image_id"] = [f"pseudo_{i}" for i in range(4)]
+    extra["vehicle_id"] = int(orig.vehicle_id.max()) + extra.index + 1
+    extra["camera_id"] = -1
+    for image_id in extra.image_id:
+        Image.new("RGB", (20, 16)).save(Path(data_cfg.data.image_dir) / f"{image_id}.jpg")
+    merged = pd.concat([orig, extra], ignore_index=True)
+    merged_csv = tmp_path / "merged.csv"
+    merged.to_csv(merged_csv, index=False)
+    data_cfg.data.train_csv = str(merged_csv)
+    data_cfg.data.val_source_csv = str(orig_csv)
+    data_cfg.data.folds_file = str(tmp_path / "pseudo_folds.csv")
+    data_cfg.data.fold = 0
+    dm = ReIDDataModule(data_cfg)
+    dm.prepare_data()
+    dm.setup("fit")
+    assert set(extra.vehicle_id).issubset(set(dm.train_frame.vehicle_id))
+    assert set(extra.vehicle_id).isdisjoint(set(dm.query_frame.vehicle_id))
+    assert set(extra.vehicle_id).isdisjoint(set(dm.gallery_frame.vehicle_id))
+    assert set(dm.query_frame.vehicle_id).issubset(set(orig.vehicle_id))
 
 
 def test_images_and_vehicle_dataset(data_cfg, tmp_path, monkeypatch):

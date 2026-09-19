@@ -17,6 +17,8 @@ init_checkpoint: null
 data:
   root: /data/projects/ryzhichkin/ReID/data
   train_csv: ${data.root}/train.csv
+  # Identities in this file may be held out. Other train rows stay in train (fold=-1).
+  val_source_csv: ${data.root}/train.csv
   query_csv: ${data.root}/test_query.csv
   gallery_csv: ${data.root}/test_gallery.csv
   image_dir: ${data.root}/images

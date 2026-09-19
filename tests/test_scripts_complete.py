@@ -55,6 +55,19 @@ def test_pretrain_script_selects_model_data_and_recipe():
     assert '"$@"' in script.split('"$PYTHON" pretrain.py', 1)[1]
 
 
+def test_pseudo_label_script_selects_gpu_and_serving_checkpoint():
+    script = (Path(__file__).resolve().parents[1] / "scripts/pseudo_label.sh").read_text()
+    assert "device must be cuda:N or N" in script
+    assert "CUDA_VISIBLE_DEVICES" in script
+    assert "weights/finetuned/eva02.pt" in script
+    assert "scripts/pseudo_label.py" in script
+    assert "ITER=" in script
+    assert "MIN_CLUSTER_SIZE=" in script
+    assert "MIN_SAMPLES=" in script
+    assert "--min-samples" in script
+    assert '"$@"' in script.split('"$PYTHON" scripts/pseudo_label.py', 1)[1]
+
+
 def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
     first = tmp_path / "fold0.json"
     second = tmp_path / "fold1.json"
@@ -586,3 +599,114 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     )
     runpy.run_module("scripts.export_refusal", run_name="__main__")
     assert (tmp_path / "main.cbm").is_file()
+
+
+def test_export_refusal_nested(tmp_path, monkeypatch):
+    cv = tmp_path / "cv"
+    for fold in range(3):
+        _write_refusal_fold(cv, fold)
+    packs = export_refusal.collect_packs(cv, n_folds=3, k=2)
+    with pytest.raises(ValueError, match="at least 3 folds"):
+        export_refusal.nested_cosine(packs[:2])
+    with pytest.raises(ValueError, match="at least 3 folds"):
+        export_refusal.nested_catboost(packs[:2])
+
+    def fake_embed(fold, frame):
+        n = len(frame)
+        emb = np.eye(n, 8, dtype=np.float32)
+        if n >= 4:
+            emb[1] = emb[0] + 0.05
+            emb[3] = emb[2] + 0.05
+        return emb
+
+    report = export_refusal.nested_operating_points(cv, n_folds=3, k=2, seed=0, embed_fold=fake_embed)
+    assert "cosine_threshold" in report["serving"]
+    assert "model_threshold" in report["serving"]
+    assert len(report["cosine"]["fold_thresholds"]) == 3
+    cosine_yaml = tmp_path / "cosine.yaml"
+    model_yaml = tmp_path / "model.yaml"
+    both_yaml = tmp_path / "both.yaml"
+    cosine_yaml.write_text("kind: threshold\ncosine_threshold: 0.1111\n")
+    model_yaml.write_text("kind: model\nmodel_threshold: 0.2222\n")
+    both_yaml.write_text("kind: ensemble\ncosine_threshold: 0.1111\nmodel_threshold: 0.2222\n")
+    export_refusal.apply_nested_configs(
+        [cosine_yaml, model_yaml, both_yaml],
+        report["serving"]["cosine_threshold"],
+        report["serving"]["model_threshold"],
+    )
+    assert f"cosine_threshold: {report['serving']['cosine_threshold']:.4f}" in cosine_yaml.read_text()
+    assert f"model_threshold: {report['serving']['model_threshold']:.4f}" in model_yaml.read_text()
+    both = both_yaml.read_text()
+    assert f"cosine_threshold: {report['serving']['cosine_threshold']:.4f}" in both
+    assert f"model_threshold: {report['serving']['model_threshold']:.4f}" in both
+    nested_json = tmp_path / "nested.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--cv",
+            str(cv),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--nested-output",
+            str(nested_json),
+            "--update-config",
+            str(cosine_yaml),
+            str(model_yaml),
+        ],
+    )
+    export_refusal.main()
+    payload = json.loads(nested_json.read_text())
+    assert "cosine_threshold" in payload["serving"]
+    assert "model_threshold" in payload["serving"]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--cv",
+            str(cv),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--nested-output",
+            str(tmp_path / "nested-default.json"),
+            "--update-config",
+        ],
+    )
+    monkeypatch.setattr(export_refusal, "DEFAULT_NESTED_CONFIGS", (both_yaml,))
+    export_refusal.main()
+    assert (tmp_path / "nested-default.json").is_file()
+    monkeypatch.setattr(export_refusal, "bind_checkpoint_embedder", lambda *args, **kwargs: fake_embed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "nested-full.cbm"),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+            "--nested-output",
+            str(tmp_path / "nested-full.json"),
+        ],
+    )
+    (tmp_path / "served.pt").write_bytes(b"x")
+    export_refusal.main()
+    assert (tmp_path / "nested-full.cbm").is_file()

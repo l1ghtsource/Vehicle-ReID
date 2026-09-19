@@ -12,6 +12,7 @@ from torch import nn
 
 from dataset import ReIDDataModule
 from dataset.folds import fingerprint, split_fingerprint
+from eval import SERVING_FORMAT, load_result_keys
 from modules.lightning_module import ReIDModule, is_partial_validation
 from scripts.aggregate_cv import mean_stop_epochs
 
@@ -25,19 +26,30 @@ def container_dict(value: Any) -> dict[str, Any]:
 
 def load_initial_weights(module: nn.Module, path: str | Path) -> str:
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    choice = checkpoint.get("validation_weights", "raw")
-    if choice == "ema" and "ema" in checkpoint:
-        state = {f"model.{key}": value for key, value in checkpoint["ema"]["shadow"].items()}
+    if checkpoint.get("format") == SERVING_FORMAT:
+        payload = checkpoint.get("state_dict") or {}
+        if not payload:
+            raise ValueError("Serving payload is missing state_dict")
+        state = {f"model.{key}": value for key, value in payload.items()}
+        choice = str(checkpoint.get("weights") or "raw")
     else:
-        choice = "raw"
-        state = {key: value for key, value in checkpoint["state_dict"].items() if key.startswith("model.")}
+        choice = checkpoint.get("validation_weights", "raw")
+        if choice == "ema" and "ema" in checkpoint:
+            state = {f"model.{key}": value for key, value in checkpoint["ema"]["shadow"].items()}
+        else:
+            choice = "raw"
+            state = {
+                key: value for key, value in checkpoint["state_dict"].items() if key.startswith("model.")
+            }
     try:
-        missing, unexpected = module.load_state_dict(state, strict=False)
+        missing, unexpected = load_result_keys(module.load_state_dict(state, strict=False))
     except RuntimeError as error:
         raise ValueError(
             "Initial checkpoint requires the same model, pooling, and head configuration"
         ) from error
-    missing_model = [key for key in missing if key.startswith("model.")]
+    missing_model = [
+        key for key in missing if key.startswith("model.") and not str(key).endswith("mask_token")
+    ]
     if missing_model or unexpected:
         raise ValueError(
             f"Initial checkpoint model mismatch: missing={missing_model}, unexpected={unexpected}"
