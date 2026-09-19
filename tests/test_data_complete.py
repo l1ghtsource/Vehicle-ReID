@@ -184,6 +184,10 @@ def test_images_and_vehicle_dataset(data_cfg, tmp_path, monkeypatch):
     full["full_image"] = True
     item = VehicleDataset(full, data_cfg, transform)[0]
     assert item["image"].shape[1] == 16
+    with pytest.raises(ValueError, match="views"):
+        VehicleDataset(full, data_cfg, transform, views=3)
+    pair = VehicleDataset(full, data_cfg, transform, train=True, views=2)[0]
+    assert pair["view"].shape == pair["image"].shape
 
 
 def test_datamodule_all_loaders(data_cfg, tmp_path):

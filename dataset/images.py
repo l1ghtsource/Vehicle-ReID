@@ -31,10 +31,13 @@ def crop_bbox(image, bbox, context_pct=0):
 
 
 class VehicleDataset(Dataset):
-    def __init__(self, frame, cfg, transform, label_map=None, train=False, context_pct=None):
+    def __init__(self, frame, cfg, transform, label_map=None, train=False, context_pct=None, views=1):
+        if views not in {1, 2}:
+            raise ValueError("views must be 1 or 2")
         self.frame = frame.reset_index(drop=True)
         self.transform = transform
         self.label_map = label_map or {}
+        self.views = int(views)
         self.context = cfg.data.context_pct if context_pct is None else context_pct
         self.jitter = cfg.data.context_jitter_pct if train else 0
         if "image_path" in self.frame:
@@ -54,20 +57,26 @@ class VehicleDataset(Dataset):
     def __len__(self):
         return len(self.frame)
 
-    def __getitem__(self, index):
+    def _augmented_crop(self, index):
         row = self.frame.iloc[index]
         context = max(0.0, self.context + (2 * torch.rand(()).item() - 1) * self.jitter)
         with Image.open(self.paths[index]) as im:
             im = im.convert("RGB")
             if not self.full_images[index]:
                 im = crop_bbox(im, [row.x, row.y, row.w, row.h], context)
-            x = self.transform(np.asarray(im))
+            return self.transform(np.asarray(im))
+
+    def __getitem__(self, index):
+        row = self.frame.iloc[index]
         pid = int(row.get("vehicle_id", -1))
-        return {
-            "image": x,
+        item = {
+            "image": self._augmented_crop(index),
             "label": self.label_map.get(pid, -1),
             "pid": pid,
             "camera": int(row.camera_id),
             "index": index,
             "image_id": str(row.image_id),
         }
+        if self.views == 2:
+            item["view"] = self._augmented_crop(index)
+        return item

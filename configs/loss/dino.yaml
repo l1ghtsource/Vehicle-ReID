@@ -1,0 +1,27 @@
+# DINOv3-style SSL: DINO (Sinkhorn) + iBOT + KoLeo + Gram vs EMA teacher.
+# Prototype heads are discarded at init_checkpoint; retrieval uses the ReID neck.
+# LLM2CLIP keeps two 336 global views (RoPE is locked); iBOT masks EVA02 patch tokens.
+terms:
+  - name: dino
+    weight: 1.0
+    feature: neck
+    params:
+      hidden_dim: 2048
+      bottleneck_dim: 256
+      out_dim: 4096
+      nlayers: 3
+      student_temp: 0.1
+      teacher_temp: 0.07
+      center_momentum: 0.9
+      koleo_weight: 0.1
+      ibot_weight: 1.0
+      gram_weight: 1.0
+      ibot_hidden_dim: 2048
+      ibot_bottleneck_dim: 256
+      ibot_out_dim: 4096
+      ibot_nlayers: 3
+      mask_ratio_min: 0.1
+      mask_ratio_max: 0.5
+      mask_probability: 0.5
+      sinkhorn_iters: 3
+      teacher_head_momentum: 0.996

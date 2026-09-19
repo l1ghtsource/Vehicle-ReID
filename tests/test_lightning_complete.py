@@ -30,6 +30,7 @@ class TinyReID(nn.Module):
         super().__init__()
         self.linear = nn.Linear(3, 4)
         self.backbone = nn.Linear(3, 3)
+        self.backbone.dims = [4]
         self.backbone.net = TinyNet()
         self.register_buffer("running", torch.ones(1))
         self.embedding_dim = 4
@@ -38,10 +39,18 @@ class TinyReID(nn.Module):
     def freeze_backbone(self, frozen):
         self.frozen = frozen
 
-    def forward(self, image):
+    def forward(self, image, mask=None):
         pooled = image.mean((-2, -1))
         raw = self.linear(pooled)
-        return {"raw": raw, "neck": raw, "embedding": torch.nn.functional.normalize(raw, dim=1)}
+        patches = raw.unsqueeze(1).repeat(1, 4, 1)
+        if mask is not None:
+            patches = patches.masked_fill(mask.unsqueeze(-1), 0)
+        return {
+            "raw": raw,
+            "neck": raw,
+            "embedding": torch.nn.functional.normalize(raw, dim=1),
+            "patches": patches,
+        }
 
 
 def make_module(cfg, monkeypatch, data_module=None):
@@ -188,6 +197,13 @@ def test_constructor_guards_and_hf_config(cfg, monkeypatch):
     cfg.train.accumulate_grad_batches = 2
     with pytest.raises(ValueError, match="AWP"):
         make_module(cfg, monkeypatch)
+    cfg.train.awp.enabled = False
+    cfg.train.accumulate_grad_batches = 1
+    cfg.loss.terms = [
+        OmegaConf.create({"name": "dino", "weight": 1, "feature": "neck", "params": {"out_dim": 8}})
+    ]
+    with pytest.raises(ValueError, match="DINO SSL requires train.ema"):
+        make_module(cfg, monkeypatch)
 
 
 def test_configure_and_fit_hooks(cfg, monkeypatch):
@@ -256,6 +272,40 @@ def test_training_step_all_paths(cfg, monkeypatch):
     monkeypatch.setattr(module, "lr_schedulers", lambda: [])
     with pytest.raises(RuntimeError, match="one scheduler"):
         module.training_step(batch(), 1)
+
+
+def test_dino_training_step_requires_view_and_ema(cfg, monkeypatch):
+    cfg.train.ema.enabled = True
+    cfg.train.rdrop.enabled = False
+    cfg.loss.terms = [
+        OmegaConf.create(
+            {
+                "name": "dino",
+                "weight": 1,
+                "feature": "neck",
+                "params": {"hidden_dim": 8, "bottleneck_dim": 4, "out_dim": 8, "sinkhorn_iters": 1},
+            }
+        )
+    ]
+    module = make_module(cfg, monkeypatch)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    with pytest.raises(ValueError, match="second augmented view"):
+        module.training_step(batch(), 0)
+    module.ema = EMA(module.model)
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert module.model.linear.weight.grad is not None
+    module.ema = None
+    with pytest.raises(ValueError, match="requires EMA"):
+        module.training_step(payload, 0)
 
 
 class Scale:

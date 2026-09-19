@@ -4,7 +4,7 @@ import pytest
 import torch
 from hydra import compose, initialize_config_dir
 
-from modules.losses.core import AdaSP, LossCollection, Triplet
+from modules.losses.core import DINO, AdaSP, LossCollection, Triplet, sample_ibot_masks
 
 
 @pytest.mark.parametrize(
@@ -28,6 +28,7 @@ from modules.losses.core import AdaSP, LossCollection, Triplet
         "fastap",
         "lifted",
         "cosface",
+        "dino",
         "triplet_distanceweighted",
         "triplet_semihard",
     ],
@@ -79,3 +80,49 @@ def test_adasp_rejects_unbalanced_and_permutation_invariance():
     torch.testing.assert_close(loss(x, y), loss(x[permutation], y[permutation]))
     with pytest.raises(ValueError):
         loss(x[:7], y[:7])
+
+
+def test_dino_views_koleo_and_invalid_params():
+    with pytest.raises(ValueError, match="Invalid DINO"):
+        DINO(4, student_temp=0)
+    with pytest.raises(ValueError, match="Invalid iBOT mask"):
+        sample_ibot_masks(0, 4)
+    with pytest.raises(ValueError, match="Invalid iBOT mask"):
+        sample_ibot_masks(2, 4, min_ratio=0.5, max_ratio=0.1)
+    none = sample_ibot_masks(3, 8, probability=0.0)
+    assert not none.any()
+    always = sample_ibot_masks(2, 6, min_ratio=0.4, max_ratio=0.6, probability=1.0)
+    assert always.any()
+    tiny = DINO(4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, sinkhorn_iters=1)
+    pair = torch.randn(4, 4, requires_grad=True)
+    loss = tiny(pair, pair.detach())
+    loss.backward()
+    assert torch.isfinite(loss)
+    assert pair.grad is not None
+    patches = torch.randn(4, 5, 4, requires_grad=True)
+    mask = torch.zeros(4, 5, dtype=torch.bool)
+    mask[0, 0] = True
+    masked = tiny(pair.detach(), pair.detach(), patches, patches.detach(), mask)
+    masked.backward()
+    assert patches.grad is not None
+    single_patch = torch.randn(4, 1, 4, requires_grad=True)
+    skipped = tiny(pair.detach(), pair.detach(), single_patch, single_patch.detach(), mask[:, :1])
+    skipped.backward()
+    assert torch.isfinite(skipped)
+    empty_mask = torch.zeros(4, 5, dtype=torch.bool)
+    gram_only = tiny(pair.detach(), pair.detach(), patches.detach(), patches.detach(), empty_mask)
+    assert torch.isfinite(gram_only)
+    wide = DINO(
+        4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, patch_dim=6, sinkhorn_iters=1
+    )
+    wide_patches = torch.randn(4, 3, 6, requires_grad=True)
+    wide_mask = torch.ones(4, 3, dtype=torch.bool)
+    wide_loss = wide(pair.detach(), pair.detach(), wide_patches, wide_patches.detach(), wide_mask)
+    wide_loss.backward()
+    assert wide_patches.grad is not None
+    single = torch.randn(2, 4, requires_grad=True)
+    collapsed = tiny(single, single.detach())
+    collapsed.backward()
+    assert torch.isfinite(collapsed)
+    with pytest.raises(ValueError, match="even concatenated"):
+        tiny(torch.randn(3, 4), torch.randn(3, 4))

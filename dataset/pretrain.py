@@ -66,16 +66,69 @@ def read_vric(root: Path) -> pd.DataFrame:
 
 
 READERS = {"veri": read_veri, "vric": read_vric}
+SSL_CROP = "test_train_ssl_crop"
+SSL_FULL = "test_train_ssl_full"
+SSL_SOURCE = "test_train_ssl"
+SSL_SOURCES = {SSL_SOURCE, SSL_CROP, SSL_FULL}
+
+
+def ssl_image_mode(name) -> str | None:
+    token = str(name).lower()
+    if token in {SSL_SOURCE, SSL_CROP}:
+        return "crop"
+    if token == SSL_FULL:
+        return "full"
+    return None
+
+
+def read_test_train_ssl(cfg, mode="crop") -> pd.DataFrame:
+    if mode not in {"crop", "full"}:
+        raise ValueError("SSL image mode must be crop or full")
+    parts = [
+        ("train", read_annotations(cfg.data.train_csv, labeled=True)),
+        ("query", read_annotations(cfg.data.query_csv, labeled=False)),
+        ("gallery", read_annotations(cfg.data.gallery_csv, labeled=False)),
+    ]
+    frames = []
+    for _, frame in parts:
+        part = frame.copy()
+        part["identity_key"] = "ssl:" + part.image_id.astype(str)
+        part["camera_key"] = "ssl:" + part.camera_id.astype(str)
+        part["full_image"] = mode == "full"
+        part["source"] = SSL_FULL if mode == "full" else SSL_CROP
+        frames.append(part)
+    frame = pd.concat(frames, ignore_index=True)
+    if frame.empty:
+        raise ValueError("test_train_ssl annotations are empty")
+    if mode == "full":
+        frame = frame.drop_duplicates("image_id", keep="first").reset_index(drop=True)
+    elif frame.image_id.duplicated().any():
+        raise ValueError("Competition train/test image IDs must be unique for SSL pretrain")
+    return frame[
+        ["image_id", "x", "y", "w", "h", "identity_key", "camera_key", "full_image", "source"]
+    ]
 
 
 def load_external_data(cfg) -> pd.DataFrame:
     selected = [str(name).lower() for name in cfg.pretrain.datasets]
     if not selected or len(selected) != len(set(selected)):
         raise ValueError("pretrain.datasets must contain unique dataset names")
-    unknown = set(selected) - set(READERS)
+    allowed = set(READERS) | SSL_SOURCES
+    unknown = set(selected) - allowed
     if unknown:
         raise ValueError(f"Unknown pretraining datasets: {sorted(unknown)}")
-    frames = [READERS[name](Path(getattr(cfg.pretrain, name).root)) for name in selected]
+    ssl_modes = [ssl_image_mode(name) for name in selected]
+    if any(mode is not None for mode in ssl_modes) and (
+        any(mode is None for mode in ssl_modes) or len(selected) != 1
+    ):
+        raise ValueError("test_train_ssl cannot mix with labeled extra datasets")
+    frames = []
+    for name in selected:
+        mode = ssl_image_mode(name)
+        if mode is not None:
+            frames.append(read_test_train_ssl(cfg, mode))
+        else:
+            frames.append(READERS[name](Path(getattr(cfg.pretrain, name).root)))
     frame = pd.concat(frames, ignore_index=True)
     if frame.image_id.duplicated().any():
         raise ValueError("External image IDs must be unique")
@@ -116,12 +169,14 @@ class PretrainDataModule(ReIDDataModule):
         )
         self.query_frame = query
         self.gallery_frame = gallery
+        ssl = any(ssl_image_mode(name) is not None for name in self.cfg.pretrain.datasets)
         self.train_set = VehicleDataset(
             self.train_frame,
             self.cfg,
             build_transforms(self.cfg, True),
             self.label_map,
             True,
+            views=2 if ssl else 1,
         )
         self.val_set = VehicleDataset(
             pd.concat([query, gallery], ignore_index=True),

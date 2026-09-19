@@ -157,6 +157,10 @@ class Backbone(nn.Module):
                 state = load_state(path)
                 visual = {k[len("visual.") :]: v for k, v in state.items() if k.startswith("visual.")}
                 self.net.load_state_dict(visual or state, strict=True)
+            if not hasattr(self.net, "mask_token"):
+                width = int(getattr(self.net, "embed_dim", self.dims[0]))
+                self.net.mask_token = nn.Parameter(torch.zeros(1, 1, width))
+                nn.init.trunc_normal_(self.net.mask_token, std=0.02)
         elif cfg.backend == "custom":
             self.net = instantiate(cfg.kwargs)
             self.dims = list(cfg.feature_dims)
@@ -165,7 +169,7 @@ class Backbone(nn.Module):
         if cfg.checkpoint_path and cfg.backend not in {"llm2clip", "radio"} and initialize_pretrained:
             self.net.load_state_dict(load_state(cfg.checkpoint_path), strict=True)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         c = self.cfg
         if self.backend == "timm":
             out = self.net(x) if c.features_only else self.net.forward_features(x)
@@ -178,7 +182,8 @@ class Backbone(nn.Module):
         elif self.backend == "radio":
             _, out = self.net(x)
         elif self.backend == "llm2clip":
-            out = self.net.norm(self.net.forward_features(x, return_all_features=True))
+            tokens = self.net.forward_features(x, return_all_features=True, bool_masked_pos=mask)
+            out = self.net.norm(tokens)
         else:
             out = self.net(x)
         out = list(out) if isinstance(out, (list, tuple)) else [out]

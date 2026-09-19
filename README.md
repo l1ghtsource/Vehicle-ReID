@@ -145,6 +145,18 @@ datasets reproducible from the original downloads.
 
 These images are already cropped, so pretraining does not apply competition bounding boxes.
 
+`pretrain.datasets=[test_train_ssl_crop]` (alias `test_train_ssl`) is unlabeled DINOv3-style
+pretraining on every competition **crop**: `train.csv` plus `test_query.csv` plus `test_gallery.csv`.
+`test_train_ssl_full` uses the same files but feeds the original full image and keeps one row per
+`image_id`. Test rows have no `vehicle_id`. Each image is its own SSL instance.
+
+The loss matches [DINOv3](https://github.com/facebookresearch/dinov3): DINO image-level
+self-distillation with Sinkhorn, iBOT on masked patch tokens, KoLeo, and Gram anchoring against the
+EMA teacher. LLM2CLIP stays at two independently augmented 336×336 global views because EVA02 RoPE
+is locked; iBOT replaces masked EVA02 patch tokens with a learned mask token. Prototype heads are
+discarded at `init_checkpoint`. Validation is still the labeled `train.csv` query/gallery split;
+that monitor is in-sample for the train half. Do not mix SSL sources with VeRi/VRIC.
+
 ## Data validation and folds
 
 Audit CSV files, image paths, image readability, and bounding boxes:
@@ -397,18 +409,26 @@ scripts/pretrain.sh cuda:2 dinov3_convnext_base veri
 scripts/pretrain.sh cuda:2 llm2clip vric
 scripts/pretrain.sh 2 dinov3_convnext_base veri,vric
 scripts/pretrain.sh cuda:2 radio both smoke
+scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_crop
+scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_full
 ```
 
 The first argument is `cuda:N` or `N`. The second is the Hydra model group. The third is `veri`,
-`vric`, `veri,vric`, or `both`. An optional fourth token without `=` is the experiment name;
-otherwise extra tokens are Hydra overrides. LLM2CLIP is forced to 336 × 336 and `local_parts=0`.
-Set `EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaults.
+`vric`, `veri,vric`, `both`, `test_train_ssl_crop`, or `test_train_ssl_full` (`test_train_ssl` is a
+crop alias). An optional fourth token without `=` is the experiment name; otherwise extra tokens are
+Hydra overrides. LLM2CLIP is forced to 336 × 336 and `local_parts=0`. SSL replaces the experiment
+loss with DINOv3-style DINO/iBOT/KoLeo/Gram and sets `data.sampler.kind=random`. Set
+`EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaults.
 
 Direct Hydra remains available:
 
 ```bash
 .venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[veri]
 .venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
+  pretrain.datasets=[test_train_ssl_crop]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
+  pretrain.datasets=[test_train_ssl_full]
 ```
 
 The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
@@ -428,8 +448,8 @@ and data fingerprint, so `train.py` would reject that checkpoint.
 
 `init_checkpoint` loads `model.*` weights only. If the pretrain checkpoint stored EMA weights and
 `validation_weights=ema`, those shadows are used; otherwise the raw `state_dict` is used. Losses
-and classifiers are created for the competition identity count. `resume` and `init_checkpoint`
-cannot be set together.
+and classifiers are created for the competition identity count, so the DINO prototype head is not
+transferred. `resume` and `init_checkpoint` cannot be set together.
 
 ## Evaluation and retrieval
 

@@ -48,6 +48,10 @@ def test_pretrain_script_selects_model_data_and_recipe():
     assert "CUDA_VISIBLE_DEVICES" in script
     assert "data.image_size=[336,336]" in script
     assert "model.head.local_parts=0" in script
+    assert "test_train_ssl" in script
+    assert "test_train_ssl_crop" in script
+    assert "test_train_ssl_full" in script
+    assert '"loss=dino"' in script
     assert '"$@"' in script.split('"$PYTHON" pretrain.py', 1)[1]
 
 

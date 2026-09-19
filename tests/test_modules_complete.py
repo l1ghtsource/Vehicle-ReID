@@ -11,7 +11,7 @@ from torch.utils.data import DataLoader, Dataset
 import modules.inference as inference
 import modules.losses.core as loss_core
 from modules.inference import embed_loader, embed_tensor, tta_context_pcts
-from modules.losses.core import AdaSP, LossCollection, Triplet
+from modules.losses.core import DINO, AdaSP, LossCollection, Triplet
 from modules.metrics import retrieval_metrics
 from modules.optim import backbone_layer_map, build_optimizer, build_scheduler
 from modules.regularization import EMA, awp
@@ -265,6 +265,17 @@ def test_loss_validation_and_rdrop(monkeypatch):
     collection.terms = nn.ModuleList([NanLoss()])
     with pytest.raises(FloatingPointError):
         collection(features, torch.tensor([0, 0, 1, 1]))
+
+
+def test_dino_distributed_sinkhorn(monkeypatch):
+    monkeypatch.setattr(loss_core.dist, "is_available", lambda: True)
+    monkeypatch.setattr(loss_core.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(loss_core.dist, "all_reduce", lambda tensor: tensor)
+    criterion = DINO(4, hidden_dim=8, bottleneck_dim=4, out_dim=8, sinkhorn_iters=1)
+    x = torch.randn(4, 4, requires_grad=True)
+    loss = criterion(x, x.detach())
+    loss.backward()
+    assert torch.isfinite(loss)
 
 
 def test_metrics_validation_and_camera_policy():

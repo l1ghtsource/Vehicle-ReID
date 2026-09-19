@@ -7,10 +7,11 @@ import lightning as L
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 
 from dataset import PretrainDataModule
 from dataset.folds import fingerprint, split_fingerprint
+from dataset.pretrain import ssl_image_mode
 from modules.lightning_module import ReIDModule, is_partial_validation
 
 
@@ -21,8 +22,24 @@ def container_dict(value: Any) -> dict[str, Any]:
     return {str(key): item for key, item in container.items()}
 
 
+def apply_ssl_pretrain(cfg) -> None:
+    selected = [str(name).lower() for name in cfg.pretrain.datasets]
+    modes = [ssl_image_mode(name) for name in selected]
+    if not any(mode is not None for mode in modes):
+        return
+    if any(mode is None for mode in modes) or len(selected) != 1:
+        raise ValueError("test_train_ssl cannot mix with labeled extra datasets")
+    if not cfg.train.ema.enabled:
+        raise ValueError("DINO SSL requires train.ema.enabled")
+    dino = OmegaConf.load(Path(__file__).resolve().parent / "configs/loss/dino.yaml")
+    with open_dict(cfg):
+        cfg.loss = dino
+        cfg.data.sampler.kind = "random"
+
+
 @hydra.main(version_base="1.3", config_path="configs", config_name="pretrain")
 def main(cfg):
+    apply_ssl_pretrain(cfg)
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("highest" if cfg.trainer.deterministic else "high")
     dm = PretrainDataModule(cfg)
