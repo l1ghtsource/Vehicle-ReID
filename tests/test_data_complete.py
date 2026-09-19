@@ -218,6 +218,19 @@ def test_datamodule_all_loaders(data_cfg, tmp_path):
         ReIDDataModule(data_cfg).setup()
 
 
+def test_datamodule_full_retrain_uses_every_identity(data_cfg, tmp_path):
+    data_cfg.data.full_retrain = True
+    data_cfg.data.fold = -1
+    dm = ReIDDataModule(data_cfg)
+    dm.prepare_data()
+    dm.setup("fit")
+    dm.save_split(tmp_path / "split")
+    assert dm.num_classes == 10
+    assert len(dm.train_frame) == len(dm.folds)
+    assert set(dm.train_frame.vehicle_id) == set(dm.folds.vehicle_id)
+    assert (tmp_path / "split/train.csv").is_file()
+
+
 def test_loader_kwargs_workers(data_cfg):
     dm = ReIDDataModule(data_cfg)
     data_cfg.data.num_workers = 1

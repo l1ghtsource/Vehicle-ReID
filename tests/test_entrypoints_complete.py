@@ -126,6 +126,43 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
         train.main.__wrapped__(cfg)
 
 
+def test_train_full_retrain_skips_val_monitor(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(train, "ReIDDataModule", FakeDataModule)
+    monkeypatch.setattr(train, "ReIDModule", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(train, "ModelCheckpoint", FakeCheckpoint)
+    monkeypatch.setattr(train, "CSVLogger", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(train.L, "Trainer", FakeTrainer)
+    monkeypatch.setattr(train.L, "seed_everything", lambda *args, **kwargs: None)
+    cfg.output_dir = str(tmp_path / "full")
+    cfg.trainer.accelerator = "cpu"
+    cfg.trainer.devices = 1
+    cfg.trainer.strategy = "auto"
+    cfg.resume = None
+    cfg.init_checkpoint = None
+    cfg.data.full_retrain = True
+    cfg.data.cv_dir = None
+    cfg.train.epochs = 27
+    train.main.__wrapped__(cfg)
+    callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert FakeTrainer.instances[-1].kwargs["limit_val_batches"] == 0
+    assert FakeTrainer.instances[-1].kwargs["num_sanity_val_steps"] == 0
+    assert callback.kwargs["monitor"] is None
+    assert callback.kwargs["save_top_k"] == 0
+    assert cfg.train.epochs == 27
+
+    cv = tmp_path / "cv"
+    for fold, epoch in enumerate((25, 25, 24, 21, 12)):
+        directory = cv / f"fold{fold}" / "val"
+        directory.mkdir(parents=True)
+        (directory / "metrics.json").write_text(
+            json.dumps({"checkpoint": str(tmp_path / f"epoch{epoch:03d}.ckpt")})
+        )
+    cfg.data.cv_dir = str(cv)
+    train.main.__wrapped__(cfg)
+    assert cfg.train.epochs == 21
+    assert FakeTrainer.instances[-1].kwargs["max_epochs"] == 21
+
+
 class LoadedModel(nn.Module):
     def __init__(self, cfg, initialize_pretrained=False):
         super().__init__()

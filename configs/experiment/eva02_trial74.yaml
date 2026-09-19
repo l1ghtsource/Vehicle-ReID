@@ -1,0 +1,359 @@
+# @package _global_
+# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 74 recipe.
+# Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
+# TTA and postproc stay off. Checkpoint monitor is full-gallery val/mAP.
+defaults:
+  - override /model: llm2clip
+  - override /loss: arcface_adasp
+  - override /optimizer: adamw
+name: eva02_trial74
+data:
+  context_pct: 14.121327994461575
+  context_jitter_pct: 1.591395828476557
+  resize_mode: stretch
+  image_size:
+  - 336
+  - 336
+  sampler:
+    kind: pk
+    identities: 16
+    instances: 3
+    camera_diverse: false
+train:
+  epochs: 36
+  accumulate_grad_batches: 1
+  gradient_clip_val: 0.664267716463264
+  freeze_backbone_epochs: 0
+  backbone_lr_multiplier: 0.030628959948611777
+  layer_decay: 0.8542893758851426
+  no_weight_decay_bias_norm: true
+  rdrop:
+    enabled: false
+    weight: 0.4377390824647611
+    temperature: 1.8729009425192666
+  awp:
+    enabled: false
+    start_epoch: 5
+    lr: 0.05914613609181007
+    eps: 0.0006649421082813732
+    weight: 0.05620489000942858
+    parameter_pattern: weight
+  ema:
+    enabled: true
+    decay: 0.9278505741463194
+    validate: true
+model:
+  drop_path_rate: 0.015430145007863189
+  pooling:
+    kind: gem
+    p: 4.522920825669578
+    trainable: true
+    attention_hidden: 128
+  head:
+    embedding_dim: 256
+    bnneck: true
+    dropout: 0.26543203693973255
+    retrieval_feature: neck
+    local_parts: 0
+loss:
+  terms:
+  - name: arcface
+    weight: 0.2680994379021858
+    feature: neck
+    params:
+      margin: 0.18164938916737994
+      scale: 28.805803650017452
+  - name: adasp
+    weight: 1.172812136098737
+    feature: neck
+    params:
+      temp: 0.023849500243748472
+      loss_type: sp-h
+optimizer:
+  lr: 0.0003255299872477761
+  weight_decay: 0.0016731244853523653
+  betas:
+  - 0.9645397856864228
+  - 0.9933105445399129
+  eps: 4.9752513574691767e-08
+scheduler:
+  kind: linear
+  warmup_epochs: 2
+  warmup_start_factor: 0.3987098250795464
+  min_lr_ratio: 0.18101077767523094
+  milestones:
+  - 5
+  - 16
+  gamma: 0.7006287246617963
+augmentation:
+  transforms:
+  - name: HorizontalFlip
+    enabled: true
+    p: 0.4161872600350438
+    params: {}
+  - name: RandomResizedCrop
+    enabled: true
+    p: 0.5395129665330182
+    params:
+      scale:
+      - 0.6993819258644918
+      - 0.9940999507554217
+      ratio:
+      - 0.6056623007273514
+      - 1.0540922686357967
+  - name: Affine
+    enabled: true
+    p: 0.21943129937738898
+    params:
+      scale:
+      - 0.8612823785962708
+      - 1.155384185370654
+      translate_percent:
+      - -0.11983385511052677
+      - 0.06627976280410158
+      rotate:
+      - -6
+      - 6
+      shear:
+      - -6
+      - 3
+      border_mode: 0
+  - name: Perspective
+    enabled: false
+    p: 0.17179022992598353
+    params:
+      scale:
+      - 0.020347286505889593
+      - 0.07228070829948921
+  - name: ColorJitter
+    enabled: true
+    p: 0.0386803209745593
+    params:
+      brightness: 0.18211843115099383
+      contrast: 0.12714871494590843
+      saturation: 0.3126300094893299
+      hue: 0.0027441383592828484
+  - name: RandomBrightnessContrast
+    enabled: false
+    p: 0.3987117943806287
+    params:
+      brightness_limit: 0.1738588850837645
+      contrast_limit: 0.28481064722285554
+  - name: RandomGamma
+    enabled: true
+    p: 0.21401046127335704
+    params:
+      gamma_limit:
+      - 58
+      - 105
+  - name: HueSaturationValue
+    enabled: false
+    p: 0.1333001011467911
+    params:
+      hue_shift_limit: 2
+      sat_shift_limit: 21
+      val_shift_limit: 10
+  - name: RGBShift
+    enabled: false
+    p: 0.09130399085113988
+    params:
+      r_shift_limit: 10
+      g_shift_limit: 2
+      b_shift_limit: 15
+  - name: CLAHE
+    enabled: false
+    p: 0.6942305937640472
+    params:
+      clip_limit:
+      - 1.001357244070223
+      - 3.987252312420684
+  - name: ToGray
+    enabled: true
+    p: 0.19926489161483313
+    params:
+      num_output_channels: 3
+  - name: ChannelShuffle
+    enabled: false
+    p: 0.2523768756805271
+    params: {}
+  - name: ImageCompression
+    enabled: true
+    p: 0.17739884132089598
+    params:
+      quality_range:
+      - 34
+      - 86
+  - name: Downscale
+    enabled: true
+    p: 0.08709555642863245
+    params:
+      scale_range:
+      - 0.37570448201339895
+      - 0.7236599684557743
+  - name: GaussianBlur
+    enabled: true
+    p: 0.1508847821986474
+    params:
+      blur_limit:
+      - 3
+      - 7
+  - name: MotionBlur
+    enabled: true
+    p: 0.22163156422124056
+    params:
+      blur_limit:
+      - 3
+      - 5
+  - name: Defocus
+    enabled: false
+    p: 0.28191553564666105
+    params:
+      radius:
+      - 2
+      - 7
+      alias_blur:
+      - 0.1222901362408827
+      - 0.49942757555577233
+  - name: GaussNoise
+    enabled: false
+    p: 0.34881437257933234
+    params:
+      std_range:
+      - 0.019441109113299434
+      - 0.06448645288006966
+  - name: ISONoise
+    enabled: false
+    p: 0.006133818988937556
+    params:
+      intensity:
+      - 0.07988137479912351
+      - 0.34470628870381215
+  - name: MultiplicativeNoise
+    enabled: false
+    p: 0.58362043027122
+    params:
+      multiplier:
+      - 0.9465327002460052
+      - 1.1105251480358334
+  - name: RandomFog
+    enabled: true
+    p: 0.5512442214728204
+    params:
+      fog_coef_range:
+      - 0.04980249353143344
+      - 0.4509140342412573
+  - name: RandomRain
+    enabled: false
+    p: 0.2179033006568477
+    params:
+      rain_type: drizzle
+      blur_value: 7
+  - name: RandomSnow
+    enabled: false
+    p: 0.21840903716087925
+    params:
+      snow_point_range:
+      - 0.05866363677863126
+      - 0.1754851338913591
+      brightness_coeff: 1.4792929438244178
+  - name: RandomShadow
+    enabled: false
+    p: 0.08293084933029297
+    params:
+      num_shadows_limit:
+      - 1
+      - 3
+      shadow_dimension: 4
+  - name: RandomSunFlare
+    enabled: false
+    p: 0.4185578973191054
+    params:
+      src_radius: 96
+  - name: Sharpen
+    enabled: false
+    p: 0.4475912773700559
+    params:
+      alpha:
+      - 0.05786915691524019
+      - 0.4546072822935043
+  - name: CoarseDropout
+    enabled: true
+    p: 0.03227571112678057
+    params:
+      num_holes_range:
+      - 3
+      - 4
+      hole_height_range:
+      - 0.04488445142892414
+      - 0.1766479523162366
+      hole_width_range:
+      - 0.04857434249156405
+      - 0.1873760986141185
+      fill: random_uniform
+  - name: RandomErasing
+    enabled: true
+    p: 0.26697759317160197
+    params:
+      scale:
+      - 0.05983420279201539
+      - 0.155281908178168
+      ratio:
+      - 0.15628696295775976
+      - 3.5392808982700115
+      value: random
+  - name: GridDropout
+    enabled: false
+    p: 0.2264803394537369
+    params:
+      ratio: 0.177910392879931
+  - name: PatchShuffle
+    enabled: false
+    p: 0.345374816620214
+    params:
+      grid: 3
+  - name: AugMix
+    enabled: false
+    p: 0.10004933895373558
+    params:
+      severity: 3
+  - name: RandAugment
+    enabled: false
+    p: 0.0012432911674426644
+    params:
+      num_ops: 2
+      magnitude: 5
+eval:
+  weights: ema
+  tta:
+    enabled: false
+    hflip: true
+    scales:
+    - 1.0
+    rotations:
+    - -5
+    - 0
+    - 5
+    context_pcts:
+    - 0.0
+    - 5.321398609599139
+postproc:
+  enabled: false
+  streaming: true
+  max_dense_gb: 4.0
+  aqe:
+    enabled: false
+    k: 15
+    alpha: 2.3298848292166205
+    iterations: 1
+    gallery_only: true
+  gallery_aggregation:
+    enabled: false
+    k: 3
+    alpha: 0.705910404390017
+    min_similarity: 0.6660335909465711
+  rerank:
+    kind: gnn
+    k1: 21
+    k2: 7
+    lambda_value: 0.18020627302369246
+    device: cpu

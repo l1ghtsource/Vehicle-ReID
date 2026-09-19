@@ -61,6 +61,16 @@ MODELS: dict[str, SnapshotSpec | FileSpec] = {
             "LLM2CLIP-EVA02-L-14-336.pt": "408f4c9dfd708155972af4a4d224a7bf42bb2e71420e9b9a82377dee737dedbb",
         },
     },
+    "efficientloftr": {
+        "kind": "snapshot",
+        "repo_id": "zju-community/efficientloftr",
+        "allow_patterns": ["*.json", "*.safetensors", "README.md"],
+        "sha256": {
+            "model.safetensors": "00a5edc343fa222eba763643553548ad37a05aa3d00d266553c9f6cf67bb0e64",
+            "config.json": "eaa141ed38f64ec65efe7b663338e2b44d260ff2b26f5829624e5241ff29f1d8",
+            "preprocessor_config.json": "22151d20a71d5d25bee2b5f5c3a5999befa3285597218a9d1ea63998f84dc606",
+        },
+    },
 }
 
 

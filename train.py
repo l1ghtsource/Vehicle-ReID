@@ -7,12 +7,13 @@ import lightning as L
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from torch import nn
 
 from dataset import ReIDDataModule
 from dataset.folds import fingerprint, split_fingerprint
 from modules.lightning_module import ReIDModule, is_partial_validation
+from scripts.aggregate_cv import mean_stop_epochs
 
 
 def container_dict(value: Any) -> dict[str, Any]:
@@ -44,10 +45,21 @@ def load_initial_weights(module: nn.Module, path: str | Path) -> str:
     return choice
 
 
+def apply_full_retrain(cfg) -> None:
+    if not cfg.data.full_retrain:
+        return
+    with open_dict(cfg):
+        if cfg.data.cv_dir:
+            cfg.train.epochs = mean_stop_epochs(Path(str(cfg.data.cv_dir)), int(cfg.data.n_folds))
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+
+
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(cfg):
     if cfg.resume and cfg.init_checkpoint:
         raise ValueError("resume and init_checkpoint are mutually exclusive")
+    apply_full_retrain(cfg)
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("highest" if cfg.trainer.deterministic else "high")
     dm = ReIDDataModule(cfg)

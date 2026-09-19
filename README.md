@@ -309,6 +309,56 @@ and Optuna still use full-gallery mAP; mAP@10 is the contest ranking metric.*
 first true positive in the ranking. Hard misses are usually the same body style and color, not a
 random vehicle. Full case study: `notebooks/eva02/oof_analysis.ipynb`.*
 
+### Full retrain
+
+`data.full_retrain=true` trains on every competition identity (all five fold groups). There is no
+held-out val split and no `val/mAP` checkpoint monitor: Lightning saves `last.ckpt` after a fixed
+epoch budget. `eval.split=val` refuses that checkpoint, because train IDs cover the held-out fold.
+
+Set the budget to the rounded mean of the five best-checkpoint epochs from an identity-disjoint CV
+run. The filenames are 0-based Lightning epochs (`epoch025.ckpt` → 25). For
+`runs/cv/eva02_trial23` that is `(25+25+24+21+12)/5 = 21.4 → 21`, so `train.epochs=21` (epochs 0–20).
+Pass `data.cv_dir=` to compute that mean inside `train.py`; otherwise keep `train.epochs` as in the
+experiment YAML.
+
+```bash
+.venv/bin/python train.py \
+  experiment=current_best_tuned \
+  data.full_retrain=true \
+  data.cv_dir=runs/cv/eva02_trial23 \
+  output_dir=runs/full/eva02_trial23
+```
+
+Export the last EMA weights for contest serving. This is the default `scripts/export_serving.py`
+source when `runs/full/eva02_trial23/run_summary.json` exists:
+
+```bash
+.venv/bin/python scripts/export_serving.py \
+  --checkpoint runs/full/eva02_trial23/checkpoints/last.ckpt \
+  --output weights/finetuned/eva02.pt \
+  --weights ema \
+  --sha256
+```
+
+Refit CatBoost in that same embedding space. `--full-retrain` re-embeds the five CV query/gallery
+splits with the serving checkpoint (all identities, one model) and fits the same 200/4/0.08 recipe
+on every 50/50 pack. The accept threshold stays the nested 5-fold inner-CV value `0.6719` in
+`configs/refusal/`; full-retrain data are in-sample and must not retune the operating point.
+`eval.py` cannot build this pack: the full-retrain checkpoint contains every identity, so
+`eval.split=val` is rejected.
+
+```bash
+.venv/bin/python scripts/export_refusal.py \
+  --full-retrain \
+  --cv runs/cv/eva02_trial23 \
+  --checkpoint runs/full/eva02_trial23/checkpoints/last.ckpt \
+  --device cuda:1 \
+  --output weights/finetuned/eva02_catboost.cbm \
+  --sha256
+```
+
+Omit `--full-retrain` to keep the older 5-fold OOF CatBoost.
+
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
 updates happen in a defined order.
@@ -559,7 +609,8 @@ canvas = draw_matches(query_crop, gallery_crop, pair["keypoints0"], pair["keypoi
 order = reorder_head(cosine_order, inlier_counts, k=10)
 ```
 
-Local weights only (`local_files_only=True`). The checkpoint is gitignored under `weights/` like
+Local weights only (`local_files_only=True`). Download `zju-community/efficientloftr` with
+`scripts/download_weights.py efficientloftr`. The checkpoint is gitignored under `weights/` like
 other Hub snapshots; it is not part of contest serving.
 
 ![EfficientLoFTR correspondences on retrieval pairs](notebooks/eva02/readme_figs/matching_pairs.jpg)
@@ -814,6 +865,7 @@ Download supported external weights on a machine with Hugging Face access:
 .venv/bin/python scripts/download_weights.py dinov3_large
 .venv/bin/python scripts/download_weights.py radio
 .venv/bin/python scripts/download_weights.py llm2clip
+.venv/bin/python scripts/download_weights.py efficientloftr
 ```
 
 Copy the resulting `weights/` directory to the training machine and set the corresponding
@@ -822,25 +874,32 @@ access. Each download is pinned by file SHA-256 (and a Hub commit for RADIO and 
 checksum mismatch after download is an error.
 
 Contest serving weights are not these Hub snapshots. Export EMA tensors from a Lightning training
-checkpoint into a compact `.pt`, fit the CatBoost refusal head on EVA02 5-fold OOF packs, then
-record checksums:
+checkpoint into a compact `.pt`, fit CatBoost on that checkpoint's embeddings (`--full-retrain`) or
+on 5-fold OOF packs, then record checksums:
 
 ```bash
 .venv/bin/python scripts/export_serving.py \
-  --checkpoint runs/cv/eva02_trial23/fold0/checkpoints/epoch025.ckpt \
+  --checkpoint runs/full/eva02_trial23/checkpoints/last.ckpt \
   --output weights/finetuned/eva02.pt \
   --weights ema \
   --sha256
 .venv/bin/python scripts/export_refusal.py \
+  --full-retrain \
   --cv runs/cv/eva02_trial23 \
+  --checkpoint runs/full/eva02_trial23/checkpoints/last.ckpt \
+  --device cuda:1 \
   --output weights/finetuned/eva02_catboost.cbm \
   --sha256
 ```
 
-`--checkpoint` defaults to the path stored in `runs/cv/eva02_trial23/fold0/val/metrics.json`.
-The serving `.pt` is `format=reid-serving`: Hydra `cfg`, ReIDModel `state_dict`, and the exported
-weight kind. Optimizer, loops, and the unused raw copy are dropped so the file stays under the
-2 GiB contest cap. The CatBoost file is fit on all five OOF folds with the same recipe as
+`--checkpoint` for the embedding `.pt` defaults to `last_checkpoint` in
+`runs/full/eva02_trial23/run_summary.json` when that
+file exists, otherwise the path in `runs/cv/eva02_trial23/fold0/val/metrics.json`. The serving `.pt`
+is `format=reid-serving`: Hydra `cfg`, ReIDModel `state_dict`, and the exported weight kind.
+Optimizer, loops, and the unused raw copy are dropped so the file stays under the
+2 GiB contest cap. Without `--full-retrain`, CatBoost is fit on the five fold-OOF embedding packs.
+With `--full-retrain`, those same query/gallery CSVs are re-embedded by the serving checkpoint so
+the head matches the contest `.pt`. Both use the recipe in
 `notebooks/eva02/refusal_analysis.ipynb` (`iterations=200`, `depth=4`, embeddings in the feature
 vector). `--sha256` rewrites `weights/finetuned/SHA256SUMS`. `.cbm` is outside the official 2 GiB
 suffix glob.
