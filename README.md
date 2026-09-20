@@ -445,7 +445,17 @@ Stage 1 (embed + cluster, GPU 2):
 PYTHONUNBUFFERED=1 scripts/pseudo_label.sh cuda:2
 ```
 
-Writes `runs/pseudo/iter001/` (`embeddings.npy`, `clusters.csv` including `-1`, merged `train.csv`, `summary.json`). Serving uses `runs/pseudo/iter001_mcs4/`: 234 clusters, 1626 labeled test crops, 234 noise (13%), merged train 11182 rows (1541 original IDs + 234 new). `ITER=2 OUTPUT=runs/pseudo/iter002 CHECKPOINT=path/to/new.pt` starts the next labeling round. Defaults: `weights/finetuned/eva02.pt`, `min_cluster_size=4`, `min_samples=4`, `allow_single_cluster=false`. `allow_single_cluster=true` can collapse the test set into one identity. Reuse embeddings with `--embeddings runs/pseudo/iter001/embeddings.npy`.
+Writes `runs/pseudo/iter001/` (`embeddings.npy`, `clusters.csv` including `-1`, merged `train.csv`, `summary.json`). Defaults: `weights/finetuned/eva02.pt`, `min_cluster_size=4`, `min_samples=4`, `allow_single_cluster=false`. `allow_single_cluster=true` can collapse the test set into one identity. Reuse embeddings with `--embeddings runs/pseudo/iter001/embeddings.npy`. Next round: `ITER=2 OUTPUT=runs/pseudo/iter002_mcs4 CHECKPOINT=weights/finetuned/eva02.pt`.
+
+Measured HDBSCAN mcs=4 rounds (embed with the then-current serving `.pt`, merge onto original `data/train.csv`):
+
+| | clusters | labeled test | noise | merged train | orig-ID OOF mAP / mAP@10 / Rank-1 |
+| --- | ---: | ---: | ---: | --- | ---: |
+| labeled-only `eva02_trial23` | — | — | — | 9556 / 1541 IDs | 0.847 / 0.834 / 0.842 |
+| iter1 `runs/pseudo/iter001_mcs4` | 234 | 1626 | 13% (234) | 11182 / 1775 IDs | **0.857 / 0.846 / 0.853** |
+| iter2 `runs/pseudo/iter002_mcs4` | 239 | 1738 | 6.6% (122) | 11294 / 1780 IDs | 0.856 / 0.845 / 0.850 |
+
+Iter2 tightened the clusters (noise 13% → 6.6%) but did not beat iter1 OOF (mAP −0.0004, Rank-1 −0.003). Serving and `current_best_tuned` stay on iter1 (`runs/cv/pseudo_iter001_mcs4`, full retrain `runs/full/pseudo_iter001_mcs4`). Neighbor/embedding compare vs labeled-only: `notebooks/eva02/oof_compare.ipynb`.
 
 5-fold CV on orig identities, every test pseudo-label in train, GPUs 3–7. Init from the LLM2CLIP snapshot, not from a serving full-retrain `.pt`:
 
@@ -460,7 +470,7 @@ scripts/train_folds.sh 3,4,5,6,7 \
   data.val_source_csv=data/train.csv
 ```
 
-`init_checkpoint` accepts a serving `.pt` as well as a Lightning `.ckpt`. `mask_token` (DINO-only) may be missing from serving weights; it is ignored. Direct CLI: `.venv/bin/python scripts/pseudo_label.py --device cuda --iter 1`. Neighbor and embedding comparison vs labeled-only trial23: `notebooks/eva02/oof_compare.ipynb`.
+Same command with `iter002_mcs4` paths produced `runs/cv/pseudo_iter002_mcs4` (best-ckpt epochs `(15+21+12+17+14)/5 = 15.8 → 16`). `init_checkpoint` accepts a serving `.pt` as well as a Lightning `.ckpt`. `mask_token` (DINO-only) may be missing from serving weights; it is ignored. Direct CLI: `.venv/bin/python scripts/pseudo_label.py --device cuda --iter 1`.
 
 For multi-device training, the entrypoint selects a DDP strategy when `trainer.strategy=auto`.
 Training uses manual optimization so gradient accumulation, AWP, scheduler updates, and EMA
