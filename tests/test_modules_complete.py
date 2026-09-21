@@ -12,7 +12,15 @@ from torch.utils.data import DataLoader, Dataset
 
 import modules.inference as inference
 import modules.losses.core as loss_core
-from modules.inference import embed_frame, embed_loader, embed_tensor, tta_context_pcts
+from modules.inference import (
+    embed_frame,
+    embed_loader,
+    embed_tensor,
+    extract_frame,
+    inference_loader_kwargs,
+    records_frame,
+    tta_context_pcts,
+)
 from modules.losses.core import DINO, AdaSP, LossCollection, Triplet
 from modules.metrics import retrieval_metrics
 from modules.optim import backbone_layer_map, build_optimizer, build_scheduler
@@ -245,6 +253,63 @@ def test_embed_frame_averages_context_tta(cfg, monkeypatch):
     off = embed_frame(object(), cfg, "cpu", frame)
     assert seen == [float(cfg.data.context_pct)]
     assert off.shape == (2, 4)
+
+
+def test_inference_loader_kwargs_and_records_frame(cfg):
+    cfg.data.num_workers = 0
+    cpu = inference_loader_kwargs(cfg, "cpu")
+    assert cpu["num_workers"] == 0
+    assert cpu["pin_memory"] is False
+    assert cpu["persistent_workers"] is False
+    assert "prefetch_factor" not in cpu
+    cfg.data.num_workers = 3
+    cfg.data.pin_memory = True
+    cfg.data.persistent_workers = True
+    gpu = inference_loader_kwargs(cfg, "cuda")
+    assert gpu["prefetch_factor"] == int(cfg.data.prefetch_factor)
+    assert gpu["pin_memory"] is True
+    assert gpu["persistent_workers"] is True
+    assert inference_loader_kwargs(cfg, "cpu")["pin_memory"] is False
+    frame = records_frame(["a.jpg"], [[1, 2, 3, 4]])
+    assert list(frame.image_path) == ["a.jpg"]
+    assert not bool(frame.full_image.iloc[0])
+    flagged = records_frame(["a.jpg"], [[1, 2, 3, 4]], full_images=[True])
+    assert bool(flagged.full_image.iloc[0])
+    with pytest.raises(ValueError, match="full_images"):
+        records_frame(["a.jpg"], [[1, 2, 3, 4]], full_images=[False, True])
+    with pytest.raises(ValueError):
+        records_frame(["a.jpg"], [[1, 2, 3, 4], [0, 0, 1, 1]])
+
+
+def test_extract_frame_uses_vehicle_dataset(cfg, monkeypatch):
+    seen = {}
+
+    class FakeDataset:
+        def __init__(self, frame, cfg, transform, context_pct=0.0):
+            seen["n"] = len(frame)
+            seen["context"] = float(context_pct)
+            seen["transform"] = transform
+
+        def __len__(self):
+            return seen["n"]
+
+    class FakeLoader:
+        def __init__(self, dataset, **kwargs):
+            seen["loader"] = kwargs
+            self.dataset = dataset
+
+    monkeypatch.setattr(inference, "VehicleDataset", FakeDataset)
+    monkeypatch.setattr(inference, "DataLoader", FakeLoader)
+    monkeypatch.setattr(inference, "embed_loader", lambda model, loader, cfg, device: np.ones((2, 3)))
+    cfg.data.num_workers = 0
+    frame = pd.DataFrame({"image_id": ["a", "b"]})
+    out = extract_frame(object(), cfg, "cpu", frame, batch_size=2, transform="t", context_pct=7.5)
+    assert out.shape == (2, 3)
+    assert seen["n"] == 2
+    assert seen["context"] == 7.5
+    assert seen["transform"] == "t"
+    assert seen["loader"]["batch_size"] == 2
+    assert seen["loader"]["shuffle"] is False
 
 
 def term(name, feature="raw", weight=1.0, params=None):

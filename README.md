@@ -24,7 +24,7 @@ to the dataset and label mapping that produced them.
 - Reproducible GroupKFold splits with no vehicle identity overlap between train and validation.
 - CPU/offline test suite with 100% line coverage for first-party Python code.
 - Contest serving file is a compact EMA `.pt` exported from a Lightning checkpoint.
-- Serving inference uses fused SDPA, `torch.compile`, and threaded decode; isolated H200 extract() is 15.9 ms / 230 FPS.
+- Serving inference uses fused SDPA, `torch.compile`, and the same DataLoader decode path as Docker; isolated H200 `extract()` latency is 15.9 ms. Throughput is remeasured on that serving loader.
 
 ## Requirements
 
@@ -315,7 +315,7 @@ Experiment presets provide larger ready-to-run configurations:
 recipe on original labeled train only. Identity-disjoint 5-fold OOF (`runs/cv/eva02_trial23`): mAP
 0.847, mAP@10 0.834, Rank-1 0.842. 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP, linear
 schedule, EMA. Serving `weights/finetuned/eva02.pt` is the labeled-only full retrain of this recipe.
-Isolated H200 contest extract() on that file is 15.9 ms / 230 FPS (`performance_score` 0.200 / 0.20).
+Isolated H200 contest `extract()` latency on that file is 15.9 ms. The earlier 230 FPS figure was a ThreadPool decode path that Docker does not run.
 HDBSCAN test pseudo-labels were tried and are **not used**. Pass `model=` to reuse the recipe with
 another backbone.
 
@@ -908,15 +908,20 @@ fails if no query has a valid positive.
 
 Organizer timing is the full `extract()` cycle on one vehicle: disk read, decode, bbox crop,
 preprocessing, forward, postprocessing, L2. Gallery search and re-ranking are excluded — they scale
-with gallery size, not with the embedding model. `profiling/` reproduces that protocol. When
+with gallery size, not with the embedding model. `profiling/` reproduces that protocol with the
+**same decode/crop/preprocess** as Docker (`dataset.images.load_record` / `VehicleDataset`).
+`eval.py` embeds through `embed_frame` → `extract_frame` → a multiprocessing DataLoader.
+Throughput in the notebook now uses that DataLoader, not a private ThreadPool. `profiling/` is still
+not copied into the image; Docker already has `dataset/` and `modules/inference.py`. When
 `eval.tta.enabled` is true, the timed `extract()` path averages the same views as `eval.py`:
 scales, rotations, flips, and every `eval.tta.context_pcts` crop. The published serving-checkpoint
 numbers use TTA off, so they are unchanged.
 
 - `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
-  and after every timed sample.
-- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32, each run at least 10 seconds.
-  The score uses the best FPS.
+  and after every timed sample. This stays sequential `extract()` because that is the organizer
+  one-vehicle cycle.
+- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32, each run at least 10 seconds,
+  through the same DataLoader as Docker. The score uses the best FPS.
 - Also recorded: peak VRAM, weight-load time (reference), total weight-file bytes, two-run
   determinism. Stage bars are a separate diagnostic: they run after the same warmup as `latency_b1`,
   but each stage still synchronizes CUDA, so they must not be added up to explain the scored cycle.
@@ -945,22 +950,30 @@ TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.
 
 | Metric | Value |
 | --- | --- |
-| `latency_b1` | **15.9 ms** (p90 16.4 ms) |
-| `throughput` | **229.8 FPS** at batch 32 (batch 1 is 63.4 FPS) |
+| `latency_b1` | **15.9 ms** (p90 16.4 ms), sequential `extract()` |
+| `throughput` | **229.8 FPS** at batch 32 was ThreadPool PIL decode inside `profiling.extract`, **not** Docker. Remeasure on the DataLoader path before quoting FPS. |
 | Peak VRAM | 1.14 GiB @ b1 → **1.18 GiB @ b32** |
-| Load | 4.8 s (compile graph is paid in warmup, not in timed extract) |
+| Load | 4.8 s wrap; compile graph is paid on first forward (~45 s on H200), then excluded from timed extract |
 | Serving `eva02.pt` | **~1.14 GiB** (under the 2 GiB cap) |
 | Determinism | bit-identical on two compiled extracts |
-| Official performance | latency_score **1.0**, throughput_score **1.0**, **0.200 / 0.20** |
+| Official performance | latency_score **1.0** on the 15.9 ms cycle; throughput_score is not claimed until the DataLoader bench is rerun |
 
 Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inference_model`):
 
 - Fused SDPA after RoPE (`model.attn_kernel=sdpa`). Math vs SDPA embeddings were bit-identical.
   Forced Flash/mem-efficient SDPA did not beat H200 math at batch=1; keep SDPA for compile fusion.
-- `torch.compile(mode=reduce-overhead)` at load. Forward **19 → 5.7 ms**. Compile vs eager min
-  cosine 0.99988 on 32 crops. First-forward compile (~45 s) is warmup, not `latency_b1`.
-- 8-thread PIL decode for batch>1. That is what crosses 100 FPS. cv2 decode was slower at
-  batch=1 and is not used. ONNX/TensorRT was not required after compile+decode.
+  The Attention forward is installed on the EVA class so `ddp_spawn` pickle restore works.
+- `torch.compile(mode=reduce-overhead, dynamic=True)` of an embedding-only wrapper. Forward **19 →
+  5.7 ms**. Compile vs eager min cosine 0.99988 on 32 crops. Most compile cost is first forward, not
+  `torch.compile(...)`. Cold start still has to fit the overall run budget.
+- Decode/preprocess is shared with Docker (`data.decode_backend=pil`). Persistent DataLoader workers,
+  overlapping host prep with GPU, and fewer PIL → NumPy → Tensor copies are the next decode work.
+  `jpeg_cuda` (`torchvision.io.decode_jpeg(..., device="cuda")`, nvJPEG) is an experiment flag, not
+  the serving default. TensorRT is next after a static-vs-dynamic compile comparison.
+
+The container is `pytorch/pytorch:2.8.0-cuda12.8`. Organizers list a CUDA **12.2** driver. That gap
+does not by itself prove incompatibility, but NVIDIA documents limits on minor CUDA compatibility;
+the image has to be run on that driver, not assumed safe.
 
 ![extract() stage breakdown after warmup](notebooks/eva02/readme_figs/inference_stages.png)
 
@@ -969,7 +982,8 @@ Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inferenc
 
 ![Sustained extract() FPS vs batch](notebooks/eva02/readme_figs/inference_throughput.png)
 
-*Best bar is the contest throughput score. Batch 32 is 229.8 FPS on this H200.*
+*These bars are the old ThreadPool `extract()` throughput (229.8 FPS at batch 32). Docker serving
+uses a DataLoader; rerun the notebook for the replacement FPS.*
 
 The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A
 training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. Contest
@@ -1101,7 +1115,7 @@ local `none` writes every query; the Docker image uses `eva02_threshold`. The ma
 rank-average across the test query batch.
 
 `notebooks/eva02/refusal_analysis.ipynb` compares the heads and ensembles on EVA02 5-fold OOF.
-`notebooks/eva02/inference_profile.ipynb` measures the contest extract() cycle (15.9 ms / 230 FPS / 0.200 on isolated H200).
+`notebooks/eva02/inference_profile.ipynb` measures contest `extract()` latency (15.9 ms on isolated H200). Throughput must be taken from the DataLoader serving path, not the old ThreadPool extract.
 
 ## Pretrained weights and offline use
 
@@ -1222,8 +1236,11 @@ refusal=eva02_threshold
 Override `CHECKPOINT` or pass extra Hydra flags after `retrieval`. Eval loads
 `ReIDModel(..., initialize_pretrained=False)`, so Hub/timm pretrained weights are not fetched at
 inference. SDPA + `torch.compile` are enabled for llm2clip even when the Hydra default model is
-ConvNeXt: kernel flags overlay only if `model.backend` matches the checkpoint. The first
-forward pays compile (~45 s on H200); later batches use the compiled graph.
+ConvNeXt: kernel flags overlay only if `model.backend` matches the checkpoint. `torch.compile`
+does most of its work on the first forward (~45 s on H200), not when the wrapper is created; later
+batches use the compiled graph. Cold start still counts toward the overall run budget.
+The image is CUDA 12.8; organizers list a 12.2 driver — confirm that pairing by running, not by
+version numbers alone.
 `extra_data/`, tests, notebooks, and training runs are not copied into the image.
 
 ## Cross-validation

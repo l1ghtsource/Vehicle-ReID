@@ -37,6 +37,8 @@ data:
   pin_memory: true
   persistent_workers: false
   prefetch_factor: 2
+  # pil is the serving decoder. cv2 and jpeg_cuda are decode experiments.
+  decode_backend: pil
   batch_size_eval: 64
   verify_files: true
   sampler:

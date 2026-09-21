@@ -15,7 +15,7 @@ from models import ReIDModel
 from .losses.core import DINO, LossCollection
 from .metrics import retrieval_metrics
 from .optim import build_optimizer, build_scheduler
-from .regularization import EMA, awp
+from .regularization import EMA, awp, eval_mode
 
 
 def _training_batches(trainer):
@@ -136,7 +136,7 @@ class ReIDModule(L.LightningModule):
             if self.ema is None:
                 raise ValueError("DINO SSL requires EMA")
             images = torch.cat([batch["image"], batch["view"]], 0)
-            with torch.no_grad(), self.ema.apply(self.model):
+            with torch.no_grad(), eval_mode(self.model), self.ema.apply(self.model):
                 teacher = self.model(images)
             mask = None
             dino_term = next(term for term in self.losses.terms if isinstance(term, DINO))

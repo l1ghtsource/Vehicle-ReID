@@ -1,6 +1,7 @@
 from contextlib import nullcontext
 
 import numpy as np
+import pandas as pd
 import torch
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
@@ -72,6 +73,20 @@ def embed_tensor(model, batch: torch.Tensor, device, precision: str = "fp32", tt
     return result
 
 
+def inference_loader_kwargs(cfg, device) -> dict:
+    workers = int(cfg.data.num_workers)
+    pin = bool(cfg.data.pin_memory) and str(device).startswith("cuda")
+    kwargs = {
+        "num_workers": workers,
+        "pin_memory": pin,
+        "persistent_workers": bool(cfg.data.persistent_workers) and workers > 0,
+        "shuffle": False,
+    }
+    if workers > 0:
+        kwargs["prefetch_factor"] = int(cfg.data.prefetch_factor)
+    return kwargs
+
+
 @torch.inference_mode()
 def embed_loader(model, loader, cfg, device):
     model.eval()
@@ -89,20 +104,48 @@ def embed_loader(model, loader, cfg, device):
     return torch.cat(outputs).numpy()
 
 
-def embed_frame(model, cfg, device, frame):
+def extract_frame(model, cfg, device, frame, *, batch_size=None, transform=None, context_pct=None):
     device = torch.device(device)
+    transform = build_transforms(cfg) if transform is None else transform
+    context = float(cfg.data.context_pct if context_pct is None else context_pct)
+    size = int(cfg.data.batch_size_eval if batch_size is None else batch_size)
+    loader = DataLoader(
+        VehicleDataset(frame.reset_index(drop=True), cfg, transform, context_pct=context),
+        batch_size=size,
+        **inference_loader_kwargs(cfg, device),
+    )
+    return embed_loader(model, loader, cfg, device)
+
+
+def embed_frame(model, cfg, device, frame):
     contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
     transform = build_transforms(cfg)
     table = frame.reset_index(drop=True)
-    views = []
-    for context in contexts:
-        loader = DataLoader(
-            VehicleDataset(table, cfg, transform, context_pct=float(context)),
-            batch_size=int(cfg.data.batch_size_eval),
-            shuffle=False,
-            num_workers=int(cfg.data.num_workers),
-            pin_memory=bool(cfg.data.pin_memory),
-        )
-        views.append(embed_loader(model, loader, cfg, device))
+    views = [
+        extract_frame(model, cfg, device, table, transform=transform, context_pct=context)
+        for context in contexts
+    ]
     emb = np.stack(views).mean(0)
     return emb / np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
+
+
+def records_frame(paths, bboxes, full_images=None):
+    records = list(zip(list(paths), list(bboxes), strict=True))
+    flags = list(full_images) if full_images is not None else [False] * len(records)
+    if len(flags) != len(records):
+        raise ValueError("full_images must match the batch")
+    rows = []
+    for (path, bbox), full_image in zip(records, flags, strict=True):
+        rows.append(
+            {
+                "image_id": str(path),
+                "image_path": str(path),
+                "x": bbox[0],
+                "y": bbox[1],
+                "w": bbox[2],
+                "h": bbox[3],
+                "camera_id": 0,
+                "full_image": bool(full_image),
+            }
+        )
+    return pd.DataFrame(rows)

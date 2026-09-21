@@ -1,4 +1,3 @@
-from types import MethodType
 from typing import Any, cast
 
 import torch
@@ -10,6 +9,7 @@ from third_party.eva_clip.eva_vit_model import Attention as EvaAttention
 
 ATTN_KERNELS = frozenset({"math", "sdpa"})
 COMPILE_MODES = frozenset({"default", "reduce-overhead", "max-autotune"})
+ORIGINAL_EVA_FORWARD = EvaAttention.forward
 
 
 def attn_kernel_name(cfg) -> str:
@@ -113,27 +113,48 @@ def eva_attention_forward(self: EvaAttention, x, rel_pos_bias=None, attn_mask=No
     return self.proj_drop(self.proj(hidden))
 
 
+def install_eva_attention_forward() -> None:
+    EvaAttention.forward = eva_attention_forward
+
+
 def patch_eva_attention(module: nn.Module, kernel: str) -> int:
     name = str(kernel)
     if name not in ATTN_KERNELS:
         raise ValueError("attn_kernel must be math/sdpa")
+    install_eva_attention_forward()
     count = 0
     for child in module.modules():
         if not is_eva_attention(child):
             continue
-        patched = cast(Any, child)
-        patched._attn_kernel = name
-        patched.forward = MethodType(eva_attention_forward, patched)
+        object.__setattr__(child, "_attn_kernel", name)
         count += 1
     return count
 
 
-def maybe_compile(model, enabled: bool, mode: str = "reduce-overhead"):
+class EmbeddingForward(nn.Module):
+    def __init__(self, model):
+        super().__init__()
+        self.model = model
+
+    def forward(self, images):
+        output = self.model(images)
+        return output["embedding"] if isinstance(output, dict) else output
+
+
+def maybe_compile(
+    model,
+    enabled: bool,
+    mode: str = "reduce-overhead",
+    *,
+    dynamic: bool = True,
+    embedding: bool = True,
+):
     if not enabled:
         return model
     if mode not in COMPILE_MODES:
         raise ValueError("compile_mode must be default/reduce-overhead/max-autotune")
-    return torch.compile(model, mode=mode, dynamic=True)
+    target = EmbeddingForward(model) if embedding else model
+    return torch.compile(target, mode=mode, dynamic=bool(dynamic))
 
 
 def configure_runtime(cfg) -> None:
@@ -160,4 +181,9 @@ def prepare_inference_model(model, cfg) -> Any:
     if enabled is None:
         enabled = str(OmegaConf.select(cfg, "model.backend", default="")) == "llm2clip"
     mode = str(OmegaConf.select(cfg, "model.compile_mode", default="reduce-overhead"))
-    return maybe_compile(model, bool(enabled), mode)
+    dynamic = bool(OmegaConf.select(cfg, "model.compile_dynamic", default=True))
+    embedding = bool(OmegaConf.select(cfg, "model.compile_embedding", default=True))
+    return maybe_compile(model, bool(enabled), mode, dynamic=dynamic, embedding=embedding)
+
+
+install_eva_attention_forward()

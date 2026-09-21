@@ -13,6 +13,7 @@ from PIL import Image
 from torch.utils.data import DistributedSampler, RandomSampler
 
 from augmentations.pipeline import Pipeline, build_transforms
+from dataset import images as image_mod
 from dataset.datamodule import ReIDDataModule
 from dataset.folds import (
     check_fold_indices,
@@ -25,7 +26,7 @@ from dataset.folds import (
     read_annotations,
     split_fingerprint,
 )
-from dataset.images import VehicleDataset, crop_bbox, image_path
+from dataset.images import VehicleDataset, crop_bbox, decode_jpeg_tensor, decode_rgb, image_path, load_record
 from dataset.samplers import PKBatchSampler
 
 
@@ -294,6 +295,52 @@ def test_images_and_vehicle_dataset(data_cfg, tmp_path, monkeypatch):
         VehicleDataset(full, data_cfg, transform, views=3)
     pair = VehicleDataset(full, data_cfg, transform, train=True, views=2)[0]
     assert pair["view"].shape == pair["image"].shape
+
+
+def test_decode_backends_and_load_record(data_cfg, tmp_path, monkeypatch):
+    path = tmp_path / "car.jpg"
+    Image.new("RGB", (16, 12), 80).save(path, format="JPEG")
+    payload = path.read_bytes()
+    pil = decode_rgb(payload, "pil")
+    jpeg = decode_rgb(payload, "jpeg_cuda")
+    assert jpeg.mode == "RGB" and jpeg.size == pil.size
+    tensor = decode_jpeg_tensor(payload, device="cpu")
+    assert tensor.shape[0] == 3
+    seen = []
+
+    def fake_decode(encoded, mode=None, device=None):
+        seen.append(device)
+        return torch.zeros(3, 2, 2, dtype=torch.uint8)
+
+    monkeypatch.setattr(image_mod, "decode_jpeg", fake_decode)
+    out = image_mod.decode_jpeg_tensor(b"abc", device="cuda:0")
+    assert seen[0].type == "cuda"
+    assert out.shape == (3, 2, 2)
+    monkeypatch.undo()
+
+    def transform(image):
+        return torch.from_numpy(image.copy()).permute(2, 0, 1)
+
+    loaded = load_record(path, [0, 0, 16, 12], transform, 0.0, full_image=True, backend="jpeg_cuda")
+    data_cfg.data.decode_backend = "jpeg_cuda"
+    data_cfg.data.verify_files = False
+    frame = pd.DataFrame(
+        [
+            {
+                "image_id": "car.jpg",
+                "image_path": str(path),
+                "vehicle_id": 0,
+                "camera_id": 0,
+                "x": 0,
+                "y": 0,
+                "w": 16,
+                "h": 12,
+                "full_image": True,
+            }
+        ]
+    )
+    item = VehicleDataset(frame, data_cfg, transform)[0]
+    assert item["image"].shape == loaded.shape
 
 
 def test_datamodule_all_loaders(data_cfg, tmp_path):

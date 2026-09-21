@@ -316,6 +316,54 @@ def test_dino_training_step_requires_view_and_ema(cfg, monkeypatch):
         module.training_step(payload, 0)
 
 
+def test_dino_teacher_runs_in_eval_and_restores_student(cfg, monkeypatch):
+    seen = []
+
+    class DropReID(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.drop = nn.Dropout(0.5)
+            self.bn = nn.BatchNorm1d(4)
+
+        def forward(self, image, mask=None):
+            seen.append({"model": self.training, "drop": self.drop.training, "bn": self.bn.training})
+            return super().forward(image, mask)
+
+    cfg.train.ema.enabled = True
+    cfg.train.rdrop.enabled = False
+    cfg.loss.terms = [
+        OmegaConf.create(
+            {
+                "name": "dino",
+                "weight": 1,
+                "feature": "neck",
+                "params": {"hidden_dim": 8, "bottleneck_dim": 4, "out_dim": 8, "sinkhorn_iters": 1},
+            }
+        )
+    ]
+    monkeypatch.setattr(lightning_module, "ReIDModel", DropReID)
+    module = ReIDModule(cfg, 2)
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    module.ema = EMA(module.model)
+    module.model.train()
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert seen[0] == {"model": False, "drop": False, "bn": False}
+    assert seen[1] == {"model": True, "drop": True, "bn": True}
+    assert module.model.training
+    assert module.model.get_submodule("drop").training
+    assert module.model.get_submodule("bn").training
+
+
 def test_ibot_requires_token_mask_backbone(cfg, monkeypatch):
     class NoMaskBackbone(TinyBackbone):
         supports_token_mask = False

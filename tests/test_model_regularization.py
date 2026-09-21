@@ -2,7 +2,7 @@ import pytest
 import torch
 
 from models import ReIDModel
-from modules.regularization import EMA, awp
+from modules.regularization import EMA, awp, eval_mode
 
 
 @pytest.mark.parametrize("pool", ["gem", "gap", "signed_gem", "max", "avgmax", "attn"])
@@ -22,6 +22,17 @@ def test_multilevel_local_parts(cfg):
     cfg.model.head.local_parts = 2
     model = ReIDModel(cfg)
     assert model(torch.randn(2, 3, 128, 128))["raw"].shape == (2, 512)
+
+
+def test_eval_mode_restores_mixed_training_flags():
+    model = torch.nn.Sequential(torch.nn.Linear(2, 2), torch.nn.Dropout(0.5), torch.nn.BatchNorm1d(2))
+    model.train()
+    model[1].eval()
+    before = [child.training for child in model.modules()]
+    with pytest.raises(RuntimeError, match="boom"), eval_mode(model):
+        assert all(not child.training for child in model.modules())
+        raise RuntimeError("boom")
+    assert [child.training for child in model.modules()] == before
 
 
 def test_awp_restore_on_failure_and_ema(cfg):

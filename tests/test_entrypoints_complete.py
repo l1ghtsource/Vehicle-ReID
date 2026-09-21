@@ -433,6 +433,16 @@ def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     )
     assert bool(matched.model.compile) is True
     assert str(matched.model.attn_kernel) == "sdpa"
+    dynamic = eval_module.overlay_eval_config(
+        OmegaConf.create({"model": {"backend": "llm2clip", "compile_dynamic": True}}),
+        OmegaConf.merge(
+            stub,
+            {"model": {"backend": "llm2clip", "compile_dynamic": False, "compile_embedding": False}},
+        ),
+        [],
+    )
+    assert bool(dynamic.model.compile_dynamic) is False
+    assert bool(dynamic.model.compile_embedding) is False
     with_refusal = OmegaConf.merge(stub, {"refusal": {"kind": "none"}})
     _, refusal_cfg, _, _ = eval_module.load_model(with_refusal, [])
     assert str(refusal_cfg.refusal.kind) == "none"

@@ -104,7 +104,7 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
     saved_backend = OmegaConf.select(saved, "model.backend", default=missing)
     if runtime_backend is not missing and runtime_backend == saved_backend:
         model_overlay = {}
-        for key in ("attn_kernel", "compile", "compile_mode"):
+        for key in ("attn_kernel", "compile", "compile_mode", "compile_dynamic", "compile_embedding"):
             value = OmegaConf.select(cfg, f"model.{key}", default=missing)
             if value is not missing:
                 model_overlay[key] = value

@@ -1,3 +1,5 @@
+import multiprocessing as mp
+import pickle
 from types import SimpleNamespace
 
 import pytest
@@ -6,6 +8,7 @@ from omegaconf import OmegaConf
 from torch import nn
 
 from models.kernels import (
+    ORIGINAL_EVA_FORWARD,
     attn_kernel_name,
     configure_runtime,
     eva_attention_forward,
@@ -57,7 +60,7 @@ def test_sdpa_matches_math_subln_and_mask():
     assert patch_eva_attention(math_mod, "math") == 1
     assert patch_eva_attention(sdpa_mod, "sdpa") == 1
     with torch.inference_mode():
-        baseline = src(tokens, attn_mask=mask)
+        baseline = ORIGINAL_EVA_FORWARD(src, tokens, attn_mask=mask)
         math_out = math_mod(tokens, attn_mask=mask)
         sdpa_out = sdpa_mod(tokens, attn_mask=mask)
     assert torch.allclose(math_out, baseline, atol=1e-5, rtol=1e-5)
@@ -74,7 +77,7 @@ def test_sdpa_keeps_rope_and_qkv_path():
     patch_eva_attention(math_mod, "math")
     patch_eva_attention(sdpa_mod, "sdpa")
     with torch.inference_mode():
-        baseline = src(tokens)
+        baseline = ORIGINAL_EVA_FORWARD(src, tokens)
         assert torch.allclose(math_mod(tokens), baseline, atol=1e-5, rtol=1e-5)
         assert torch.allclose(sdpa_mod(tokens), math_mod(tokens), atol=1e-5, rtol=1e-5)
 
@@ -89,10 +92,40 @@ def test_sdpa_falls_back_for_relative_bias():
     with torch.inference_mode():
         table_out = patched(tokens)
         extra = patched(tokens, rel_pos_bias=bias)
-        baseline = src(tokens)
-        extra_base = src(tokens, rel_pos_bias=bias)
+        baseline = ORIGINAL_EVA_FORWARD(src, tokens)
+        extra_base = ORIGINAL_EVA_FORWARD(src, tokens, rel_pos_bias=bias)
     assert torch.allclose(table_out, baseline, atol=1e-5, rtol=1e-5)
     assert torch.allclose(extra, extra_base, atol=1e-5, rtol=1e-5)
+
+
+def _spawn_restore_attention(payload, conn):
+    attn = pickle.loads(payload)
+    out = attn(torch.ones(1, 4, 16))
+    conn.send((tuple(out.shape), getattr(attn, "_attn_kernel", None)))
+
+
+def test_patched_attention_pickle_and_spawn():
+    attn = Attention(dim=16, num_heads=4, qkv_bias=True, subln=True)
+    attn.eval()
+    patch_eva_attention(attn, "sdpa")
+    payload = pickle.dumps(attn)
+    restored = pickle.loads(payload)
+    tokens = torch.randn(1, 4, 16)
+    with torch.inference_mode():
+        assert restored(tokens).shape == (1, 4, 16)
+        assert torch.allclose(restored(tokens), attn(tokens), atol=1e-5, rtol=1e-5)
+    assert restored._attn_kernel == "sdpa"
+    ctx = mp.get_context("spawn")
+    parent, child = ctx.Pipe(duplex=False)
+    proc = ctx.Process(target=_spawn_restore_attention, args=(payload, child))
+    proc.start()
+    child.close()
+    proc.join(timeout=60)
+    assert proc.exitcode == 0
+    assert parent.poll(timeout=5)
+    shape, kernel = parent.recv()
+    assert shape == (1, 4, 16)
+    assert kernel == "sdpa"
 
 
 def test_sdpa_training_dropout_and_direct_forward():
@@ -111,6 +144,15 @@ def test_compile_and_runtime_helpers():
     compiled = maybe_compile(linear, True, mode="default")
     assert compiled is not linear
     assert compiled(torch.ones(2, 4)).shape == (2, 4)
+
+    class DictNet(nn.Module):
+        def forward(self, x):
+            return {"embedding": x + 1, "raw": x}
+
+    wrapped = maybe_compile(DictNet(), True, mode="default", dynamic=False, embedding=True)
+    assert wrapped(torch.ones(2, 3)).shape == (2, 3)
+    plain = maybe_compile(DictNet(), True, mode="default", embedding=False)
+    assert isinstance(plain(torch.ones(2, 3)), dict)
 
     fast = OmegaConf.create({"eval": {"cpu_threads": 1, "fast_kernels": True}})
     configure_runtime(fast)
@@ -132,4 +174,32 @@ def test_compile_and_runtime_helpers():
     assert defaulted(torch.ones(2, 2)).shape == (2, 2)
     skipped = prepare_inference_model(nn.Linear(2, 2), OmegaConf.create({"model": {"backend": "timm"}}))
     assert isinstance(skipped, nn.Linear)
+
+    class DictNet(nn.Module):
+        def forward(self, x):
+            return {"embedding": x, "raw": x}
+
+    flags = OmegaConf.create(
+        {
+            "eval": {"fast_kernels": True},
+            "model": {
+                "compile": True,
+                "compile_mode": "default",
+                "compile_dynamic": False,
+                "compile_embedding": True,
+            },
+        }
+    )
+    compiled_embed = prepare_inference_model(DictNet(), flags)
+    assert compiled_embed(torch.ones(2, 3)).shape == (2, 3)
+    full = prepare_inference_model(
+        DictNet(),
+        OmegaConf.create(
+            {
+                "eval": {"fast_kernels": True},
+                "model": {"compile": True, "compile_mode": "default", "compile_embedding": False},
+            }
+        ),
+    )
+    assert isinstance(full(torch.ones(2, 3)), dict)
     torch.use_deterministic_algorithms(False)

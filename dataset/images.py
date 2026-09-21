@@ -1,10 +1,18 @@
 import math
+from concurrent.futures import ThreadPoolExecutor
+from functools import partial
+from io import BytesIO
 from pathlib import Path
+from typing import cast
 
+import cv2
 import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from torchvision.io import ImageReadMode, decode_jpeg
+
+DECODE_BACKENDS = frozenset({"pil", "cv2", "jpeg_cuda"})
 
 
 def image_path(root, image_id):
@@ -17,17 +25,72 @@ def image_path(root, image_id):
     raise FileNotFoundError(p.with_suffix(".jpg"))
 
 
+def read_file(path) -> bytes:
+    return Path(path).read_bytes()
+
+
 def crop_bbox(image, bbox, context_pct=0):
     x, y, w, h = map(float, bbox)
     if w <= 0 or h <= 0 or context_pct < 0:
         raise ValueError("BBox dimensions must be positive; context_pct must be nonnegative")
-    W, H = image.size
+    width, height = image.size
     dx, dy = w * context_pct / 100, h * context_pct / 100
     left, top = max(0, math.floor(x - dx)), max(0, math.floor(y - dy))
-    right, bottom = min(W, math.ceil(x + w + dx)), min(H, math.ceil(y + h + dy))
+    right, bottom = min(width, math.ceil(x + w + dx)), min(height, math.ceil(y + h + dy))
     if right <= left or bottom <= top:
         raise ValueError(f"BBox outside image: {bbox}, image_size={image.size}")
     return image.crop((left, top, right, bottom))
+
+
+def crop_record(image: Image.Image, bbox, context_pct: float, full_image: bool = False) -> Image.Image:
+    if full_image:
+        return image
+    return crop_bbox(image, bbox, context_pct)
+
+
+def preprocess_record(image: Image.Image, transform) -> torch.Tensor:
+    return transform(np.asarray(image))
+
+
+def decode_jpeg_tensor(payload: bytes, device="cpu") -> torch.Tensor:
+    encoded = torch.frombuffer(memoryview(payload), dtype=torch.uint8).clone()
+    target = torch.device(device)
+    if target.type == "cuda":
+        return cast(torch.Tensor, decode_jpeg(encoded, mode=ImageReadMode.RGB, device=target))
+    return cast(torch.Tensor, decode_jpeg(encoded, mode=ImageReadMode.RGB))
+
+
+def decode_rgb(payload: bytes, backend: str = "pil", device="cpu") -> Image.Image:
+    if backend not in DECODE_BACKENDS:
+        raise ValueError("decode backend must be pil/cv2/jpeg_cuda")
+    if backend == "cv2":
+        array = np.frombuffer(payload, dtype=np.uint8)
+        bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
+        if bgr is None:
+            raise ValueError("Failed to decode image")
+        return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    if backend == "jpeg_cuda":
+        rgb = decode_jpeg_tensor(payload, device=device)
+        array = rgb.detach().to("cpu").permute(1, 2, 0).contiguous().numpy()
+        return Image.fromarray(array)
+    with Image.open(BytesIO(payload)) as image:
+        image.load()
+        return image.convert("RGB")
+
+
+def decode_images(payloads, backend: str = "pil", workers: int = 0, device="cpu") -> list[Image.Image]:
+    items = list(payloads)
+    decode = partial(decode_rgb, backend=backend, device=device)
+    if workers <= 1 or len(items) <= 1:
+        return [decode(payload) for payload in items]
+    with ThreadPoolExecutor(max_workers=int(workers)) as pool:
+        return list(pool.map(decode, items))
+
+
+def load_record(path, bbox, transform, context_pct: float, full_image: bool = False, backend: str = "pil"):
+    image = decode_rgb(read_file(path), backend)
+    cropped = crop_record(image, bbox, context_pct, full_image=full_image)
+    return preprocess_record(cropped, transform)
 
 
 class VehicleDataset(Dataset):
@@ -40,6 +103,7 @@ class VehicleDataset(Dataset):
         self.views = int(views)
         self.context = cfg.data.context_pct if context_pct is None else context_pct
         self.jitter = cfg.data.context_jitter_pct if train else 0
+        self.decode_backend = str(cfg.data.get("decode_backend", "pil"))
         if "image_path" in self.frame:
             self.paths = [Path(value) for value in self.frame.image_path]
         else:
@@ -60,11 +124,15 @@ class VehicleDataset(Dataset):
     def _augmented_crop(self, index):
         row = self.frame.iloc[index]
         context = max(0.0, self.context + (2 * torch.rand(()).item() - 1) * self.jitter)
-        with Image.open(self.paths[index]) as im:
-            im = im.convert("RGB")
-            if not self.full_images[index]:
-                im = crop_bbox(im, [row.x, row.y, row.w, row.h], context)
-            return self.transform(np.asarray(im))
+        bbox = [0.0, 0.0, 1.0, 1.0] if self.full_images[index] else [row.x, row.y, row.w, row.h]
+        return load_record(
+            self.paths[index],
+            bbox,
+            self.transform,
+            context,
+            full_image=self.full_images[index],
+            backend=self.decode_backend,
+        )
 
     def __getitem__(self, index):
         row = self.frame.iloc[index]

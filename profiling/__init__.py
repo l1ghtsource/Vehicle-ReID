@@ -35,7 +35,7 @@ from .report import (
     serving_bytes,
     throughput_score,
 )
-from .run import make_runner, profile_extract, time_load
+from .run import make_loader_runner, make_runner, profile_extract, time_load
 from .weights import CONTEST_SUFFIXES, EXTRA_SUFFIXES, LIMIT_BYTES, inventory
 
 __all__ = [
@@ -61,6 +61,7 @@ __all__ = [
     "inventory",
     "is_cuda",
     "latency_score",
+    "make_loader_runner",
     "make_runner",
     "measure_latency",
     "measure_stages",

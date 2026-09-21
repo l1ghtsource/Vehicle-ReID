@@ -1,21 +1,26 @@
-from concurrent.futures import ThreadPoolExecutor
-from functools import partial
-from io import BytesIO
-from pathlib import Path
 from time import perf_counter
 
-import cv2
 import numpy as np
 import torch
-from PIL import Image
 from torch.nn import functional as F
 
-from dataset.images import crop_bbox
+from dataset.images import crop_record, decode_images, decode_rgb, preprocess_record, read_file
 from modules.inference import embed_tensor, tta_context_pcts
 
 from .device import as_device, is_cuda, synchronize
 
 STAGES = ("read", "decode", "crop", "preprocess", "h2d", "forward", "l2")
+
+__all__ = [
+    "STAGES",
+    "StageClock",
+    "crop_record",
+    "decode_images",
+    "decode_rgb",
+    "extract",
+    "preprocess_record",
+    "read_file",
+]
 
 
 class StageClock:
@@ -35,45 +40,6 @@ class StageClock:
         self._mark = now
 
 
-def read_file(path) -> bytes:
-    return Path(path).read_bytes()
-
-
-DECODE_BACKENDS = frozenset({"pil", "cv2"})
-
-
-def decode_rgb(payload: bytes, backend: str = "pil") -> Image.Image:
-    if backend not in DECODE_BACKENDS:
-        raise ValueError("decode backend must be pil/cv2")
-    if backend == "cv2":
-        array = np.frombuffer(payload, dtype=np.uint8)
-        bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
-        if bgr is None:
-            raise ValueError("Failed to decode image")
-        return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-    with Image.open(BytesIO(payload)) as image:
-        image.load()
-        return image.convert("RGB")
-
-
-def decode_images(payloads, backend: str = "pil", workers: int = 8) -> list[Image.Image]:
-    items = list(payloads)
-    if workers <= 1 or len(items) <= 1:
-        return [decode_rgb(payload, backend) for payload in items]
-    with ThreadPoolExecutor(max_workers=int(workers)) as pool:
-        return list(pool.map(partial(decode_rgb, backend=backend), items))
-
-
-def crop_record(image: Image.Image, bbox, context_pct: float, full_image: bool = False) -> Image.Image:
-    if full_image:
-        return image
-    return crop_bbox(image, bbox, context_pct)
-
-
-def preprocess_record(image: Image.Image, transform) -> torch.Tensor:
-    return transform(np.asarray(image))
-
-
 def extract(
     paths,
     bboxes,
@@ -88,35 +54,30 @@ def extract(
     model_cfg=None,
     timed: bool = False,
     decode_backend: str = "pil",
-    decode_workers: int = 8,
+    decode_workers: int = 0,
 ):
     records = list(zip(paths, bboxes, strict=True))
     if not records:
         raise ValueError("Empty extract batch")
+    if decode_workers < 0:
+        raise ValueError("decode_workers must be nonnegative")
     flags = list(full_images) if full_images is not None else [False] * len(records)
     if len(flags) != len(records):
         raise ValueError("full_images must match the batch")
     target = as_device(device)
     clock = StageClock(target) if timed else None
+    decode_device = target if decode_backend == "jpeg_cuda" and is_cuda(target) else "cpu"
     decoded = []
-    if clock is None and int(decode_workers) > 1 and len(records) > 1:
-        payloads = [read_file(path) for path, _bbox in records]
-        images = decode_images(payloads, decode_backend, workers=int(decode_workers))
-        decoded = [
-            (image, bbox, full)
-            for image, (_path, bbox), full in zip(images, records, flags, strict=True)
-        ]
-    else:
-        for (path, bbox), full_image in zip(records, flags, strict=True):
-            if clock is not None:
-                clock.start()
-            payload = read_file(path)
-            if clock is not None:
-                clock.add("read")
-            image = decode_rgb(payload, decode_backend)
-            if clock is not None:
-                clock.add("decode")
-            decoded.append((image, bbox, full_image))
+    for (path, bbox), full_image in zip(records, flags, strict=True):
+        if clock is not None:
+            clock.start()
+        payload = read_file(path)
+        if clock is not None:
+            clock.add("read")
+        image = decode_rgb(payload, decode_backend, device=decode_device)
+        if clock is not None:
+            clock.add("decode")
+        decoded.append((image, bbox, full_image))
     views = []
     for context in tta_context_pcts(tta, context_pct):
         tensors = []
