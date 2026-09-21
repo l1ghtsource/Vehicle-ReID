@@ -1,7 +1,17 @@
-from torch.utils.data import DataLoader
+from time import perf_counter
+from typing import cast
 
-from dataset.images import VehicleDataset
-from modules.inference import embed_loader, inference_loader_kwargs, records_frame
+from torch.utils.data import DataLoader, Dataset
+
+from dataset.images import VehicleDataset, decode_backend_name
+from modules.inference import (
+    embed_frame,
+    embed_tensor,
+    fuse_context_views,
+    inference_loader_kwargs,
+    records_frame,
+    tta_context_pcts,
+)
 
 from .device import memory_snapshot, reset_peak, timed
 from .extract import extract
@@ -18,6 +28,8 @@ from .protocol import (
 )
 from .report import checkpoint_breakdown, contest_summary, serving_bytes
 from .weights import inventory
+
+STREAM_REPEATS = 100_000
 
 
 def _slice_flags(full_images, size: int):
@@ -44,27 +56,83 @@ def make_runner(paths, bboxes, transform, model, device, **kwargs):
     return run
 
 
-def make_loader_runner(paths, bboxes, transform, model, device, cfg, *, full_images=None, context_pct=0.0):
-    loaders = {}
+class RepeatDataset(Dataset):
+    def __init__(self, dataset, repeats: int = STREAM_REPEATS):
+        self.dataset = dataset
+        self.repeats = int(repeats)
+        if self.repeats < 1 or len(dataset) < 1:
+            raise ValueError("repeat dataset needs a nonempty source and repeats >= 1")
 
-    def run_batch(size: int):
-        if size not in loaders:
-            frame = records_frame(
-                list(paths)[:size],
-                list(bboxes)[:size],
-                full_images=_slice_flags(full_images, size),
-            )
+    def __len__(self):
+        return len(self.dataset) * self.repeats
+
+    def __getitem__(self, index):
+        return self.dataset[int(index) % len(self.dataset)]
+
+
+class BatchStream:
+    def __init__(self, loader):
+        self.loader = loader
+        self.iterator = None
+        self.cold_s = None
+
+    def next_batch(self):
+        if self.iterator is None:
+            started = perf_counter()
+            self.iterator = iter(self.loader)
+            batch = next(self.iterator)
+            self.cold_s = perf_counter() - started
+            return batch
+        return next(self.iterator)
+
+
+def make_loader_runner(paths, bboxes, transform, model, device, cfg, *, full_images=None):
+    frame = records_frame(list(paths), list(bboxes), full_images=full_images)
+    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
+    streams = {}
+
+    def stream_for(size: int, context: float) -> BatchStream:
+        key = (int(size), float(context))
+        if key not in streams:
+            base = VehicleDataset(frame, cfg, transform, context_pct=float(context))
             kwargs = inference_loader_kwargs(cfg, device)
-            if kwargs["num_workers"] > 0:
-                kwargs["persistent_workers"] = True
-            loaders[size] = DataLoader(
-                VehicleDataset(frame.reset_index(drop=True), cfg, transform, context_pct=float(context_pct)),
-                batch_size=size,
-                **kwargs,
-            )
-        return embed_loader(model, loaders[size], cfg, device)
+            loader = DataLoader(RepeatDataset(base), batch_size=int(size), **kwargs)
+            streams[key] = BatchStream(loader)
+        return streams[key]
 
-    return run_batch
+    class Runner:
+        def __call__(self, size: int):
+            views = []
+            for context in contexts:
+                batch = stream_for(size, context).next_batch()
+                image = batch["image"].to(device, non_blocking=True)
+                views.append(
+                    embed_tensor(
+                        model,
+                        image,
+                        device,
+                        precision=str(cfg.eval.precision),
+                        tta=cfg.eval.tta,
+                        model_cfg=cfg.model,
+                    )
+                    .cpu()
+                    .numpy()
+                )
+            return fuse_context_views(views)
+
+        def cold_start_s(self):
+            rows = []
+            for (size, context), stream in streams.items():
+                rows.append(
+                    {
+                        "batch_size": int(size),
+                        "context_pct": float(context),
+                        "seconds": cast(float, stream.cold_s),
+                    }
+                )
+            return rows
+
+    return Runner()
 
 
 def profile_extract(
@@ -102,7 +170,7 @@ def profile_extract(
     if stage_repeats < 1:
         raise ValueError("stage_repeats must be >= 1")
     if cfg is not None:
-        decode_backend = str(cfg.data.get("decode_backend", decode_backend))
+        decode_backend = decode_backend_name(cfg, default=decode_backend)
     kwargs = {
         "context_pct": context_pct,
         "precision": precision,
@@ -113,16 +181,7 @@ def profile_extract(
     }
     run = make_runner(paths, bboxes, transform, model, device, full_images=full_images, **kwargs)
     serving = (
-        make_loader_runner(
-            paths,
-            bboxes,
-            transform,
-            model,
-            device,
-            cfg,
-            full_images=full_images,
-            context_pct=context_pct,
-        )
+        make_loader_runner(paths, bboxes, transform, model, device, cfg, full_images=full_images)
         if cfg is not None
         else run
     )
@@ -138,7 +197,7 @@ def profile_extract(
         return run(1, timed=True)
 
     def run_batch(size: int):
-        serving(size)
+        return serving(size)
 
     stage_mean = measure_stages(
         run_one,
@@ -150,9 +209,22 @@ def profile_extract(
     reset_peak(device)
     latency = measure_latency(run_one, device, warmup=warmup, repeats=repeats)
     throughput = measure_throughput(run_batch, device, batch_sizes=sizes, min_seconds=min_seconds)
+    cold_start = getattr(serving, "cold_start_s", None)
+    if callable(cold_start):
+        throughput["cold_start_s"] = cold_start()
     vram = measure_vram(run_batch, device, batch_sizes=sizes, repeats=vram_repeats)
-    first = serving(min(8, len(paths)))
-    second = serving(min(8, len(paths)))
+    sample = min(8, len(paths))
+    if cfg is None:
+        first = run(sample)
+        second = run(sample)
+    else:
+        frame = records_frame(
+            list(paths)[:sample],
+            list(bboxes)[:sample],
+            full_images=_slice_flags(full_images, sample),
+        )
+        first = embed_frame(model, cfg, device, frame)
+        second = embed_frame(model, cfg, device, frame)
     determinism = compare_embeddings(first, second)
     summary = contest_summary(
         inventory=weights_info,

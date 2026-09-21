@@ -12,7 +12,7 @@ from PIL import Image
 from torch.utils.data import Dataset
 from torchvision.io import ImageReadMode, decode_jpeg
 
-DECODE_BACKENDS = frozenset({"pil", "cv2", "jpeg_cuda"})
+DECODE_BACKENDS = frozenset({"pil", "cv2", "jpeg"})
 
 
 def image_path(root, image_id):
@@ -60,18 +60,30 @@ def decode_jpeg_tensor(payload: bytes, device="cpu") -> torch.Tensor:
     return cast(torch.Tensor, decode_jpeg(encoded, mode=ImageReadMode.RGB))
 
 
+def decode_backend_name(cfg, default: str = "pil") -> str:
+    data = getattr(cfg, "data", None)
+    if data is None or not hasattr(data, "get"):
+        return str(default)
+    value = data.get("decode_backend", default)
+    if value is None:
+        return str(default)
+    return str(value)
+
+
 def decode_rgb(payload: bytes, backend: str = "pil", device="cpu") -> Image.Image:
+    if backend == "jpeg_cuda":
+        raise ValueError("jpeg_cuda is not a DataLoader decoder; use jpeg for CPU torchvision decode")
     if backend not in DECODE_BACKENDS:
-        raise ValueError("decode backend must be pil/cv2/jpeg_cuda")
+        raise ValueError("decode backend must be pil/cv2/jpeg")
     if backend == "cv2":
         array = np.frombuffer(payload, dtype=np.uint8)
         bgr = cv2.imdecode(array, cv2.IMREAD_COLOR)
         if bgr is None:
             raise ValueError("Failed to decode image")
         return Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-    if backend == "jpeg_cuda":
-        rgb = decode_jpeg_tensor(payload, device=device)
-        array = rgb.detach().to("cpu").permute(1, 2, 0).contiguous().numpy()
+    if backend == "jpeg":
+        rgb = decode_jpeg_tensor(payload, device="cpu")
+        array = rgb.detach().permute(1, 2, 0).contiguous().numpy()
         return Image.fromarray(array)
     with Image.open(BytesIO(payload)) as image:
         image.load()
@@ -103,7 +115,7 @@ class VehicleDataset(Dataset):
         self.views = int(views)
         self.context = cfg.data.context_pct if context_pct is None else context_pct
         self.jitter = cfg.data.context_jitter_pct if train else 0
-        self.decode_backend = str(cfg.data.get("decode_backend", "pil"))
+        self.decode_backend = decode_backend_name(cfg)
         if "image_path" in self.frame:
             self.paths = [Path(value) for value in self.frame.image_path]
         else:

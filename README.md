@@ -920,8 +920,10 @@ numbers use TTA off, so they are unchanged.
 - `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
   and after every timed sample. This stays sequential `extract()` because that is the organizer
   one-vehicle cycle.
-- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32, each run at least 10 seconds,
-  through the same DataLoader as Docker. The score uses the best FPS.
+- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32. One DataLoader iterator
+  keeps yielding batches for at least 10 seconds; the score counts images actually returned.
+  Worker startup is `cold_start_s`, outside that window. Context TTA uses the same
+  `embed_frame` average as Docker. The score uses the best FPS.
 - Also recorded: peak VRAM, weight-load time (reference), total weight-file bytes, two-run
   determinism. Stage bars are a separate diagnostic: they run after the same warmup as `latency_b1`,
   but each stage still synchronizes CUDA, so they must not be added up to explain the scored cycle.
@@ -966,10 +968,11 @@ Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inferenc
 - `torch.compile(mode=reduce-overhead, dynamic=True)` of an embedding-only wrapper. Forward **19 →
   5.7 ms**. Compile vs eager min cosine 0.99988 on 32 crops. Most compile cost is first forward, not
   `torch.compile(...)`. Cold start still has to fit the overall run budget.
-- Decode/preprocess is shared with Docker (`data.decode_backend=pil`). Persistent DataLoader workers,
-  overlapping host prep with GPU, and fewer PIL → NumPy → Tensor copies are the next decode work.
-  `jpeg_cuda` (`torchvision.io.decode_jpeg(..., device="cuda")`, nvJPEG) is an experiment flag, not
-  the serving default. TensorRT is next after a static-vs-dynamic compile comparison.
+- Decode/preprocess is shared with Docker (`data.decode_backend=pil`). Old serving checkpoints
+  omit that key; load fills `pil`, and `decode_backend_name` does the same without attribute access.
+  `jpeg` is CPU torchvision decode. `jpeg_cuda` is rejected in DataLoader workers: a GPU JPEG path
+  has to crop and normalize tensors in the main process, not inside workers. TensorRT is next after
+  a static-vs-dynamic compile comparison.
 
 The container is `pytorch/pytorch:2.8.0-cuda12.8`. Organizers list a CUDA **12.2** driver. That gap
 does not by itself prove incompatibility, but NVIDIA documents limits on minor CUDA compatibility;

@@ -117,6 +117,11 @@ def extract_frame(model, cfg, device, frame, *, batch_size=None, transform=None,
     return embed_loader(model, loader, cfg, device)
 
 
+def fuse_context_views(views):
+    stacked = np.stack(list(views)).mean(0)
+    return stacked / np.maximum(np.linalg.norm(stacked, axis=1, keepdims=True), 1e-12)
+
+
 def embed_frame(model, cfg, device, frame):
     contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
     transform = build_transforms(cfg)
@@ -125,8 +130,7 @@ def embed_frame(model, cfg, device, frame):
         extract_frame(model, cfg, device, table, transform=transform, context_pct=context)
         for context in contexts
     ]
-    emb = np.stack(views).mean(0)
-    return emb / np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
+    return fuse_context_views(views)
 
 
 def records_frame(paths, bboxes, full_images=None):

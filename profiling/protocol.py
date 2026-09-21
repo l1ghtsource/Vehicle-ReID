@@ -82,8 +82,11 @@ def measure_throughput(
         start = time.perf_counter()
         images = 0
         while True:
-            run_batch(size)
-            images += size
+            produced = run_batch(size)
+            count = len(produced)
+            if count < 1:
+                raise ValueError("throughput step returned no images")
+            images += int(count)
             elapsed = time.perf_counter() - start
             if elapsed >= min_seconds:
                 break

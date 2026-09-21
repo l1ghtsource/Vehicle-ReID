@@ -51,6 +51,9 @@ def override_key(item: str) -> str | None:
 EVAL_PROTOCOL = {
     "data.validation.exclude_all_same_camera": False,
 }
+RUNTIME_DEFAULTS = {
+    "data.decode_backend": "pil",
+}
 
 
 def remount_data_root(saved, effective, overridden: set[str]) -> None:
@@ -69,6 +72,15 @@ def remount_data_root(saved, effective, overridden: set[str]) -> None:
 
 def protocol_overridden(key: str, overridden: set[str]) -> bool:
     return any(key == item or key.startswith(f"{item}.") for item in overridden)
+
+
+def apply_runtime_defaults(cfg, effective) -> None:
+    missing = object()
+    for key, default in RUNTIME_DEFAULTS.items():
+        if OmegaConf.select(effective, key, default=missing) is not missing:
+            continue
+        value = OmegaConf.select(cfg, key, default=missing)
+        OmegaConf.update(effective, key, default if value is missing else value)
 
 
 def apply_eval_protocol(cfg, effective, overridden: set[str]) -> None:
@@ -122,6 +134,7 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
             continue
         OmegaConf.update(effective, key, value, merge=True)
     remount_data_root(saved, effective, overridden)
+    apply_runtime_defaults(cfg, effective)
     apply_eval_protocol(cfg, effective, overridden)
     return effective
 

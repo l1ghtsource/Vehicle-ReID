@@ -26,7 +26,15 @@ from dataset.folds import (
     read_annotations,
     split_fingerprint,
 )
-from dataset.images import VehicleDataset, crop_bbox, decode_jpeg_tensor, decode_rgb, image_path, load_record
+from dataset.images import (
+    VehicleDataset,
+    crop_bbox,
+    decode_backend_name,
+    decode_jpeg_tensor,
+    decode_rgb,
+    image_path,
+    load_record,
+)
 from dataset.samplers import PKBatchSampler
 
 
@@ -302,8 +310,12 @@ def test_decode_backends_and_load_record(data_cfg, tmp_path, monkeypatch):
     Image.new("RGB", (16, 12), 80).save(path, format="JPEG")
     payload = path.read_bytes()
     pil = decode_rgb(payload, "pil")
-    jpeg = decode_rgb(payload, "jpeg_cuda")
+    jpeg = decode_rgb(payload, "jpeg")
     assert jpeg.mode == "RGB" and jpeg.size == pil.size
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        decode_rgb(payload, "jpeg_cuda")
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        load_record(path, [0, 0, 16, 12], lambda image: image, 0.0, backend="jpeg_cuda")
     tensor = decode_jpeg_tensor(payload, device="cpu")
     assert tensor.shape[0] == 3
     seen = []
@@ -321,8 +333,8 @@ def test_decode_backends_and_load_record(data_cfg, tmp_path, monkeypatch):
     def transform(image):
         return torch.from_numpy(image.copy()).permute(2, 0, 1)
 
-    loaded = load_record(path, [0, 0, 16, 12], transform, 0.0, full_image=True, backend="jpeg_cuda")
-    data_cfg.data.decode_backend = "jpeg_cuda"
+    loaded = load_record(path, [0, 0, 16, 12], transform, 0.0, full_image=True, backend="jpeg")
+    data_cfg.data.decode_backend = "jpeg"
     data_cfg.data.verify_files = False
     frame = pd.DataFrame(
         [
@@ -341,6 +353,16 @@ def test_decode_backends_and_load_record(data_cfg, tmp_path, monkeypatch):
     )
     item = VehicleDataset(frame, data_cfg, transform)[0]
     assert item["image"].shape == loaded.shape
+    old = OmegaConf.create({"data": {"context_pct": 0, "context_jitter_pct": 0, "verify_files": False}})
+    with pytest.raises(AttributeError):
+        _ = old.data.decode_backend
+    assert decode_backend_name(old) == "pil"
+    assert decode_backend_name(SimpleNamespace()) == "pil"
+    explicit_none = OmegaConf.create({"data": {"decode_backend": None}})
+    assert decode_backend_name(explicit_none) == "pil"
+    old_frame = frame.copy()
+    old_item = VehicleDataset(old_frame, old, transform)[0]
+    assert old_item["image"].shape[0] == 3
 
 
 def test_datamodule_all_loaders(data_cfg, tmp_path):

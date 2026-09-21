@@ -443,6 +443,19 @@ def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     )
     assert bool(dynamic.model.compile_dynamic) is False
     assert bool(dynamic.model.compile_embedding) is False
+    old_saved = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    del old_saved.data["decode_backend"]
+    with pytest.raises(AttributeError):
+        _ = old_saved.data.decode_backend
+    filled = eval_module.overlay_eval_config(old_saved, cfg, [])
+    assert str(filled.data.decode_backend) == "pil"
+    kept_backend = OmegaConf.create(OmegaConf.to_container(old_saved, resolve=True))
+    kept_backend.data.decode_backend = "cv2"
+    runtime = OmegaConf.merge(cfg, {"data": {"decode_backend": "jpeg"}})
+    unchanged = eval_module.overlay_eval_config(kept_backend, runtime, [])
+    assert str(unchanged.data.decode_backend) == "cv2"
+    overridden = eval_module.overlay_eval_config(old_saved, runtime, ["data.decode_backend=jpeg"])
+    assert str(overridden.data.decode_backend) == "jpeg"
     with_refusal = OmegaConf.merge(stub, {"refusal": {"kind": "none"}})
     _, refusal_cfg, _, _ = eval_module.load_model(with_refusal, [])
     assert str(refusal_cfg.refusal.kind) == "none"

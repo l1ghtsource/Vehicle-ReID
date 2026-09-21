@@ -1,4 +1,3 @@
-from importlib import import_module
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,7 +9,8 @@ from PIL import Image
 from torch import nn
 from torch.nn import functional as F
 
-from modules.inference import autocast_context, extract_frame, records_frame, tta_context_pcts
+from dataset.images import VehicleDataset
+from modules.inference import autocast_context, embed_frame, extract_frame, records_frame, tta_context_pcts
 from profiling import (
     CONTEST_SUFFIXES,
     EXTRA_SUFFIXES,
@@ -52,10 +52,8 @@ from profiling import (
 )
 from profiling import device as device_mod
 from profiling.extract import crop_record, decode_images, extract, preprocess_record
-from profiling.run import make_loader_runner
+from profiling.run import RepeatDataset, make_loader_runner
 from profiling.weights import is_contest_weight, is_extra_weight, iter_files
-
-extract_impl = import_module("profiling.extract")
 
 
 class DummyReID(nn.Module):
@@ -226,10 +224,12 @@ def test_extract_stages_and_guards(tmp_path):
     assert cv_image.mode == "RGB" and cv_image.size == decode_rgb(payload).size
     assert len(decode_images([payload, payload], backend="cv2", workers=2)) == 2
     assert len(decode_images([payload], backend="pil", workers=4)) == 1
-    jpeg = decode_rgb(payload, "jpeg_cuda")
+    jpeg = decode_rgb(payload, "jpeg")
     assert jpeg.mode == "RGB" and jpeg.size == decode_rgb(payload).size
-    with pytest.raises(ValueError, match="pil/cv2"):
-        decode_rgb(payload, "jpeg")
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        decode_rgb(payload, "jpeg_cuda")
+    with pytest.raises(ValueError, match="pil/cv2/jpeg"):
+        decode_rgb(payload, "turbo")
     with pytest.raises(ValueError, match="Failed to decode"):
         decode_rgb(b"not-an-image", "cv2")
     parallel = extract(
@@ -242,8 +242,10 @@ def test_extract_stages_and_guards(tmp_path):
         decode_workers=2,
     )
     assert parallel.shape == (2, 8)
-    cuda_cpu = extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_backend="jpeg_cuda")
-    assert cuda_cpu.shape == (1, 8)
+    jpeg_out = extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_backend="jpeg")
+    assert jpeg_out.shape == (1, 8)
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_backend="jpeg_cuda")
     with pytest.raises(ValueError, match="decode_workers"):
         extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_workers=-1)
 
@@ -322,24 +324,6 @@ def test_extract_context_tta_matches_eval_forwards(tmp_path):
     assert np.allclose(both, mean, atol=1e-5)
 
 
-def test_extract_jpeg_cuda_passes_cuda_device(tmp_path, monkeypatch):
-    paths, bboxes = records(tmp_path, 1)
-    seen = []
-
-    def fake_decode(payload, backend, device="cpu"):
-        seen.append((backend, device))
-        return Image.new("RGB", (16, 12), 40)
-
-    monkeypatch.setattr(extract_impl, "is_cuda", lambda device: True)
-    monkeypatch.setattr(extract_impl, "decode_rgb", fake_decode)
-    model = DummyReID()
-    model.eval()
-    out = extract(paths, bboxes, tiny_transform, model, "cpu", decode_backend="jpeg_cuda")
-    assert out.shape == (1, 8)
-    assert seen[0][0] == "jpeg_cuda"
-    assert seen[0][1] == as_device("cpu")
-
-
 def test_extract_frame_matches_sequential_extract(cfg, tmp_path):
     paths, bboxes = records(tmp_path, 2)
     model = DummyReID()
@@ -362,30 +346,58 @@ def test_extract_frame_matches_sequential_extract(cfg, tmp_path):
     assert np.allclose(sequential, loaded, atol=1e-5)
 
 
-def test_loader_runner_caches_persistent_workers(cfg, tmp_path, monkeypatch):
+def test_loader_runner_streams_one_iterator(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
     seen = []
+    original = VehicleDataset.__getitem__
 
-    class FakeLoader:
-        def __init__(self, dataset, **kwargs):
-            seen.append(kwargs)
-            self.dataset = dataset
+    def spy(self, index):
+        seen.append(int(index))
+        return original(self, index)
 
-    monkeypatch.setattr("profiling.run.DataLoader", FakeLoader)
-    monkeypatch.setattr("profiling.run.VehicleDataset", lambda *args, **kwargs: object())
-    monkeypatch.setattr(
-        "profiling.run.embed_loader",
-        lambda *args, **kwargs: np.ones((2, 8), dtype=np.float32),
-    )
-    cfg.data.num_workers = 2
-    cfg.data.persistent_workers = False
+    monkeypatch.setattr(VehicleDataset, "__getitem__", spy)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
     cfg.data.pin_memory = False
-    runner = make_loader_runner(["a.jpg", "b.jpg"], [[0, 0, 4, 4], [0, 0, 4, 4]], None, object(), "cpu", cfg)
-    first = runner(2)
-    second = runner(2)
-    assert first.shape == second.shape
-    assert len(seen) == 1
-    assert seen[0]["num_workers"] == 2
-    assert seen[0]["persistent_workers"] is True
+    cfg.data.persistent_workers = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    for _ in range(8):
+        assert runner(1).shape == (1, 8)
+    assert seen[:8] == [0, 1, 2, 3, 0, 1, 2, 3]
+    cold = runner.cold_start_s()
+    assert len(cold) == 1
+    assert cold[0]["batch_size"] == 1
+    assert cold[0]["seconds"] >= 0
+    with pytest.raises(ValueError, match="repeat dataset"):
+        RepeatDataset([])
+
+
+def test_loader_runner_matches_embed_frame_context_tta(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 2)
+    model = CountingReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.context_pct = 0.0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 50]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    monkeypatch.setattr("modules.inference.build_transforms", lambda cfg: tiny_transform)
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    model.calls = 0
+    got = runner(2)
+    assert model.calls == 2
+    frame = records_frame(paths, bboxes)
+    model.calls = 0
+    expected = embed_frame(model, cfg, "cpu", frame)
+    assert model.calls == 2
+    assert np.max(np.abs(got - expected)) < 1e-5
 
 
 def test_embed_tta_and_amp(monkeypatch):
@@ -523,6 +535,7 @@ def test_protocol_and_profile(cfg, tmp_path):
         cfg=cfg,
     )
     assert serving_report["throughput"]["best_fps"] > 0
+    assert serving_report["throughput"]["cold_start_s"]
     runner = make_runner(paths, bboxes, tiny_transform, model, "cpu")
     assert runner(1).shape[0] == 1
     latency = measure_latency(lambda: runner(1), "cpu", warmup=1, repeats=2)
@@ -565,6 +578,14 @@ def test_protocol_and_profile(cfg, tmp_path):
         measure_throughput(lambda size: None, "cpu", batch_sizes=(1,), min_seconds=-1)
     with pytest.raises(ValueError, match="warmup_batches"):
         measure_throughput(lambda size: None, "cpu", batch_sizes=(1,), warmup_batches=-1)
+    with pytest.raises(ValueError, match="no images"):
+        measure_throughput(
+            lambda size: np.zeros((0, 2)),
+            "cpu",
+            batch_sizes=(1,),
+            min_seconds=0,
+            warmup_batches=0,
+        )
     with pytest.raises(ValueError, match="repeats"):
         measure_vram(lambda size: None, "cpu", repeats=0)
     with pytest.raises(ValueError, match="shapes"):

@@ -66,7 +66,6 @@ def extract(
         raise ValueError("full_images must match the batch")
     target = as_device(device)
     clock = StageClock(target) if timed else None
-    decode_device = target if decode_backend == "jpeg_cuda" and is_cuda(target) else "cpu"
     decoded = []
     for (path, bbox), full_image in zip(records, flags, strict=True):
         if clock is not None:
@@ -74,7 +73,7 @@ def extract(
         payload = read_file(path)
         if clock is not None:
             clock.add("read")
-        image = decode_rgb(payload, decode_backend, device=decode_device)
+        image = decode_rgb(payload, decode_backend)
         if clock is not None:
             clock.add("decode")
         decoded.append((image, bbox, full_image))
