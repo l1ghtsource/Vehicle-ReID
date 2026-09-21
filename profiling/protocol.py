@@ -27,6 +27,19 @@ def summarize_ms(samples) -> dict:
     }
 
 
+def measure_stages(run_one, run_timed, device, *, warmup: int = CONTEST_WARMUP, repeats: int = 8) -> dict:
+    if warmup < 0 or repeats < 1:
+        raise ValueError("warmup must be >= 0 and repeats must be >= 1")
+    for _ in range(warmup):
+        run_one()
+        synchronize(device)
+    stages = []
+    for _ in range(repeats):
+        _, detail = run_timed()
+        stages.append(detail["per_image_ms"])
+    return {name: float(sum(row[name] for row in stages) / len(stages)) for name in stages[0]}
+
+
 def measure_latency(run_one, device, *, warmup: int = CONTEST_WARMUP, repeats: int = CONTEST_REPEATS) -> dict:
     if warmup < 0 or repeats < 1:
         raise ValueError("warmup must be >= 0 and repeats must be >= 1")

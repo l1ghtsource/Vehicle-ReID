@@ -110,8 +110,16 @@ def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
         (directory / "metrics.json").write_text(
             json.dumps({"checkpoint": f"/ckpt/fold{fold}/epoch{epoch:03d}.ckpt"})
         )
-    assert aggregate_cv.mean_stop_epochs(cv) == 21
+    assert aggregate_cv.mean_stop_epochs(cv) == 22
     assert aggregate_cv.checkpoint_epoch(Path("epoch000.ckpt")) == 0
+    assert aggregate_cv.completed_epochs(Path("epoch000.ckpt")) == 1
+    assert aggregate_cv.completed_epochs(Path("epoch025.ckpt")) == 26
+    zeros = tmp_path / "zeros"
+    for fold in range(5):
+        directory = zeros / f"fold{fold}" / "val"
+        directory.mkdir(parents=True)
+        (directory / "metrics.json").write_text(json.dumps({"checkpoint": f"/ckpt/fold{fold}/epoch000.ckpt"}))
+    assert aggregate_cv.mean_stop_epochs(zeros) == 1
 
     monkeypatch.setattr(
         sys,

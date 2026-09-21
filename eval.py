@@ -14,6 +14,7 @@ from omegaconf import OmegaConf
 
 from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
 from models import ReIDModel
+from models.kernels import prepare_inference_model
 from modules.inference import embed_frame
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
@@ -99,6 +100,16 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
     streaming = OmegaConf.select(cfg, "postproc.streaming", default=missing)
     if streaming is not missing:
         overlay["postproc"] = {"streaming": streaming}
+    runtime_backend = OmegaConf.select(cfg, "model.backend", default=missing)
+    saved_backend = OmegaConf.select(saved, "model.backend", default=missing)
+    if runtime_backend is not missing and runtime_backend == saved_backend:
+        model_overlay = {}
+        for key in ("attn_kernel", "compile", "compile_mode"):
+            value = OmegaConf.select(cfg, f"model.{key}", default=missing)
+            if value is not missing:
+                model_overlay[key] = value
+        if model_overlay:
+            overlay["model"] = model_overlay
     effective = OmegaConf.merge(saved, overlay)
     overridden: set[str] = set()
     for item in task_overrides() if override_items is None else override_items:
@@ -203,9 +214,9 @@ def main(cfg):
     model, cfg, checkpoint, choice = load_model(cfg)
     L.seed_everything(cfg.seed, workers=True)
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-    torch.use_deterministic_algorithms(bool(cfg.trainer.deterministic))
     device = torch.device(cfg.eval.device)
     model.to(device).eval()
+    model = prepare_inference_model(model, cfg)
     if cfg.eval.split == "val":
         folds = ensure_folds(cfg)
         if checkpoint.get("data_fingerprint") != fingerprint(folds):

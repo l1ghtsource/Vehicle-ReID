@@ -29,6 +29,7 @@ from profiling import (
     latency_score,
     make_runner,
     measure_latency,
+    measure_stages,
     measure_throughput,
     measure_vram,
     mem_info,
@@ -49,7 +50,7 @@ from profiling import (
     timed,
 )
 from profiling import device as device_mod
-from profiling.extract import crop_record, extract, preprocess_record
+from profiling.extract import crop_record, decode_images, extract, preprocess_record
 from profiling.weights import is_contest_weight, is_extra_weight, iter_files
 
 
@@ -216,6 +217,25 @@ def test_extract_stages_and_guards(tmp_path):
     assert again.shape == (1, 8)
     gray = extract([tmp_path / "gray.jpg"], [[0, 0, 8, 8]], tiny_transform, model, "cpu", precision="bf16")
     assert gray.shape == (1, 8)
+    payload = read_file(paths[0])
+    cv_image = decode_rgb(payload, "cv2")
+    assert cv_image.mode == "RGB" and cv_image.size == decode_rgb(payload).size
+    assert len(decode_images([payload, payload], backend="cv2", workers=2)) == 2
+    assert len(decode_images([payload], backend="pil", workers=4)) == 1
+    with pytest.raises(ValueError, match="pil/cv2"):
+        decode_rgb(payload, "jpeg")
+    with pytest.raises(ValueError, match="Failed to decode"):
+        decode_rgb(b"not-an-image", "cv2")
+    parallel = extract(
+        paths[:2],
+        bboxes[:2],
+        tiny_transform,
+        model,
+        "cpu",
+        decode_backend="cv2",
+        decode_workers=2,
+    )
+    assert parallel.shape == (2, 8)
 
 
 class CountingReID(DummyReID):
@@ -408,6 +428,22 @@ def test_protocol_and_profile(tmp_path):
     assert runner(1).shape[0] == 1
     latency = measure_latency(lambda: runner(1), "cpu", warmup=1, repeats=2)
     assert latency["n"] == 2
+    order = []
+
+    def mark_warm():
+        order.append("warm")
+
+    def mark_stage():
+        order.append("stage")
+        return None, {"per_image_ms": {"forward": 1.0, "decode": 2.0}}
+
+    stages = measure_stages(mark_warm, mark_stage, "cpu", warmup=2, repeats=3)
+    assert order == ["warm", "warm", "stage", "stage", "stage"]
+    assert stages == {"forward": 1.0, "decode": 2.0}
+    with pytest.raises(ValueError, match="warmup"):
+        measure_stages(mark_warm, mark_stage, "cpu", warmup=-1, repeats=1)
+    with pytest.raises(ValueError, match="repeats"):
+        measure_stages(mark_warm, mark_stage, "cpu", warmup=0, repeats=0)
     thr = measure_throughput(
         lambda size: runner(size), "cpu", batch_sizes=(1,), min_seconds=0, warmup_batches=0
     )

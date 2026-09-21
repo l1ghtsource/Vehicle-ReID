@@ -9,6 +9,10 @@ layout: NLC
 num_prefix_tokens: 1
 spatial_multiple: 14
 drop_path_rate: 0.0
+# Fused SDPA after RoPE. torch.compile is paid at load (~45 s on H200), not in timed extract.
+attn_kernel: sdpa
+compile: true
+compile_mode: reduce-overhead
 pooling:
   kind: cls
 normalization:

@@ -159,8 +159,8 @@ def test_train_full_retrain_skips_val_monitor(cfg, tmp_path, monkeypatch):
         )
     cfg.data.cv_dir = str(cv)
     train.main.__wrapped__(cfg)
-    assert cfg.train.epochs == 21
-    assert FakeTrainer.instances[-1].kwargs["max_epochs"] == 21
+    assert cfg.train.epochs == 22
+    assert FakeTrainer.instances[-1].kwargs["max_epochs"] == 22
 
 
 class LoadedModel(nn.Module):
@@ -417,6 +417,22 @@ def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     assert overlay.eval.split == "val"
     assert overlay.eval.weights == "raw"
     assert str(overlay.refusal.kind) == str(cfg.refusal.kind)
+    kept = eval_module.overlay_eval_config(
+        OmegaConf.create(
+            {"model": {"backend": "llm2clip", "compile": True}, "data": {"root": str(tmp_path)}}
+        ),
+        stub,
+        [],
+    )
+    assert str(kept.model.backend) == "llm2clip"
+    assert bool(kept.model.compile) is True
+    matched = eval_module.overlay_eval_config(
+        OmegaConf.create({"model": {"backend": "llm2clip", "compile": False}}),
+        OmegaConf.merge(stub, {"model": {"backend": "llm2clip", "compile": True, "attn_kernel": "sdpa"}}),
+        [],
+    )
+    assert bool(matched.model.compile) is True
+    assert str(matched.model.attn_kernel) == "sdpa"
     with_refusal = OmegaConf.merge(stub, {"refusal": {"kind": "none"}})
     _, refusal_cfg, _, _ = eval_module.load_model(with_refusal, [])
     assert str(refusal_cfg.refusal.kind) == "none"

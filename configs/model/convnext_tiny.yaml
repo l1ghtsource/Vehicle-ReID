@@ -18,6 +18,9 @@ gradient_checkpointing: false
 spatial_multiple: 32
 # Pass data.image_size into timm.create_model (required for Swin/ViT fixed-resolution weights).
 bind_image_size: false
+attn_kernel: math
+compile: false
+compile_mode: reduce-overhead
 pooling:
   kind: gem
   p: 3.0

@@ -104,9 +104,7 @@ def read_test_train_ssl(cfg, mode="crop") -> pd.DataFrame:
         frame = frame.drop_duplicates("image_id", keep="first").reset_index(drop=True)
     elif frame.image_id.duplicated().any():
         raise ValueError("Competition train/test image IDs must be unique for SSL pretrain")
-    return frame[
-        ["image_id", "x", "y", "w", "h", "identity_key", "camera_key", "full_image", "source"]
-    ]
+    return frame[["image_id", "x", "y", "w", "h", "identity_key", "camera_key", "full_image", "source"]]
 
 
 def load_external_data(cfg) -> pd.DataFrame:

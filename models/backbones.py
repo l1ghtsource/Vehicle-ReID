@@ -16,6 +16,7 @@ from third_party.eva_clip.eva_vit_model import EVAVisionTransformer
 from third_party.radio.hf_model import RADIOConfig, RADIOModel
 
 from .input_size import spatial_multiple
+from .kernels import attn_kernel_name, patch_eva_attention
 
 TOKEN_MASK_BACKENDS = frozenset({"llm2clip"})
 
@@ -170,6 +171,7 @@ class Backbone(nn.Module):
             raise ValueError(f"Unknown backbone backend {cfg.backend}")
         if cfg.checkpoint_path and cfg.backend not in {"llm2clip", "radio"} and initialize_pretrained:
             self.net.load_state_dict(load_state(cfg.checkpoint_path), strict=True)
+        patch_eva_attention(self.net, attn_kernel_name(cfg))
 
     @property
     def supports_token_mask(self) -> bool:

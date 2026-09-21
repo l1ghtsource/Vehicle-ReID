@@ -7,6 +7,7 @@ from .protocol import (
     CONTEST_WARMUP,
     compare_embeddings,
     measure_latency,
+    measure_stages,
     measure_throughput,
     measure_vram,
 )
@@ -54,6 +55,8 @@ def profile_extract(
     precision: str = "fp32",
     tta=None,
     model_cfg=None,
+    decode_backend: str = "pil",
+    decode_workers: int = 8,
     warmup: int = CONTEST_WARMUP,
     repeats: int = CONTEST_REPEATS,
     batch_sizes=CONTEST_BATCH_SIZES,
@@ -74,6 +77,8 @@ def profile_extract(
         "precision": precision,
         "tta": tta,
         "model_cfg": model_cfg,
+        "decode_backend": decode_backend,
+        "decode_workers": decode_workers,
     }
     run = make_runner(paths, bboxes, transform, model, device, full_images=full_images, **kwargs)
     weights_info = inventory(roots)
@@ -84,15 +89,19 @@ def profile_extract(
     def run_one():
         run(1)
 
+    def run_timed():
+        return run(1, timed=True)
+
     def run_batch(size: int):
         run(size)
 
-    stages = []
-    for _ in range(stage_repeats):
-        _, detail = run(1, timed=True)
-        stages.append(detail["per_image_ms"])
-    stage_mean = {name: float(sum(row[name] for row in stages) / len(stages)) for name in stages[0]}
-
+    stage_mean = measure_stages(
+        run_one,
+        run_timed,
+        device,
+        warmup=warmup,
+        repeats=stage_repeats,
+    )
     reset_peak(device)
     latency = measure_latency(run_one, device, warmup=warmup, repeats=repeats)
     throughput = measure_throughput(run_batch, device, batch_sizes=sizes, min_seconds=min_seconds)

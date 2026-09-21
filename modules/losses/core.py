@@ -219,14 +219,15 @@ class DINO(nn.Module):
         total = q.sum().clone()
         q = q / self._all_reduce(total).clamp_min(1e-12)
         n_proto, batch = q.shape
+        n_tokens = self._all_reduce(q.new_tensor(float(batch))).clamp_min(1e-12)
         for _ in range(self.sinkhorn_iters):
             rows = q.sum(dim=1, keepdim=True).clone()
             q = q / self._all_reduce(rows).clamp_min(1e-12)
             q = q / n_proto
             if batch:
                 q = q / q.sum(dim=0, keepdim=True).clamp_min(1e-12)
-                q = q / batch
-        return (q * batch).t()
+                q = q / n_tokens
+        return (q * n_tokens).t()
 
     def _koleo(self, x):
         if x.shape[0] < 2:

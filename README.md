@@ -24,6 +24,7 @@ to the dataset and label mapping that produced them.
 - Reproducible GroupKFold splits with no vehicle identity overlap between train and validation.
 - CPU/offline test suite with 100% line coverage for first-party Python code.
 - Contest serving file is a compact EMA `.pt` exported from a Lightning checkpoint.
+- Serving inference uses fused SDPA, `torch.compile`, and threaded decode; isolated H200 extract() is 15.9 ms / 230 FPS.
 
 ## Requirements
 
@@ -314,6 +315,7 @@ Experiment presets provide larger ready-to-run configurations:
 recipe on original labeled train only. Identity-disjoint 5-fold OOF (`runs/cv/eva02_trial23`): mAP
 0.847, mAP@10 0.834, Rank-1 0.842. 336 input, `local_parts=0`, PK 16×2, ArcFace+AdaSP, linear
 schedule, EMA. Serving `weights/finetuned/eva02.pt` is the labeled-only full retrain of this recipe.
+Isolated H200 contest extract() on that file is 15.9 ms / 230 FPS (`performance_score` 0.200 / 0.20).
 HDBSCAN test pseudo-labels were tried and are **not used**. Pass `model=` to reuse the recipe with
 another backbone.
 
@@ -321,7 +323,18 @@ another backbone.
 
 *Identity-disjoint 5-fold OOF on EVA02 (`runs/cv/eva02_trial23`). Query-weighted means: mAP 0.847,
 mAP@10 0.834, Rank-1 0.842. Fold 4 is the strongest; fold 3 is the weakest. Checkpoint selection
-and Optuna still use full-gallery mAP; mAP@10 is the contest ranking metric.*
+and Optuna still use full-gallery mAP; mAP@10 is the contest ranking metric. GroupKFold stays.
+Identity-bootstrap 95% CIs (2000 resamples): mAP [0.833, 0.860], mAP@10 [0.820, 0.849], Rank-1
+[0.824, 0.861]. Fold mAP std is 0.009. Optuna used these same folds, so this is not a locked
+post-selection test. OOF is fold extractors; serving `eva02.pt` is a full-retrain on every labeled
+identity.*
+
+![OOF difficulty slices](notebooks/eva02/readme_figs/oof_difficulty_slices.jpg)
+
+*Lookalikes (impostor cosine ≥ 0.55) and strong bbox-aspect shifts are the weak slices (mAP 0.765
+and 0.782). Night / blur / small bbox are closer to the mean. Subsampling each val gallery to 750
+(test size) raises mAP slightly (0.853) and drops Rank-1 (0.829). Notebook:
+`notebooks/eva02/oof_analysis.ipynb`.*
 
 ![Fold-0 retrieval examples: query, Rank-1, first true positive](notebooks/eva02/readme_figs/current_best_pairs.jpg)
 
@@ -376,12 +389,13 @@ query–gallery cosines. Positives shift up; negatives stay near zero.*
 held-out val split and no `val/mAP` checkpoint monitor: Lightning saves `last.ckpt` after a fixed
 epoch budget. `eval.split=val` refuses that checkpoint, because train IDs cover the held-out fold.
 
-Set the budget to the rounded mean of the five best-checkpoint epochs from an identity-disjoint CV
-run. The filenames are 0-based Lightning epochs (`epoch025.ckpt` → 25). For labeled-only
-`runs/cv/eva02_trial23` that is `(25+25+24+21+12)/5 = 21.4 → 21`, so `train.epochs=21`
-(epochs 0–20). Pass `data.cv_dir=` to compute that mean inside `train.py`; otherwise keep
-`train.epochs` as in the experiment YAML. Init from the LLM2CLIP Hub snapshot, not from a previous
-serving full-retrain `.pt` (that checkpoint has already seen every original identity).
+Set the budget to the rounded mean of the five best-checkpoint **completed** epoch counts from an
+identity-disjoint CV run. Lightning filenames are 0-based (`epoch025.ckpt` means 26 completed
+epochs). For labeled-only `runs/cv/eva02_trial23` that is `(26+26+25+22+13)/5 = 22.4 → 22`, so
+`train.epochs=22` (epochs 0–21). Pass `data.cv_dir=` to compute that mean inside `train.py`;
+otherwise keep `train.epochs` as in the experiment YAML. Init from the LLM2CLIP Hub snapshot, not
+from a previous serving full-retrain `.pt` (that checkpoint has already seen every original
+identity).
 
 ```bash
 .venv/bin/python train.py \
@@ -577,9 +591,10 @@ Evaluate the validation split:
 
 `eval.py` keeps model/data/augmentation from the checkpoint Hydra cfg, then applies the current H7
 junk protocol (`data.validation.exclude_all_same_camera=false`) unless that key is an explicit CLI
-override. Older checkpoints stored `true` (drop every gallery crop on the query camera). Eval no
-longer keeps that mask, so validation scores are not inflated relative to H7. To reproduce the old
-filter: `data.validation.exclude_all_same_camera=true`.
+override. llm2clip serving also turns on fused SDPA and `torch.compile` (`prepare_inference_model`)
+unless `model.compile=false`. Older checkpoints stored `true` (drop every gallery crop on the query
+camera). Eval no longer keeps that mask, so validation scores are not inflated relative to H7. To
+reproduce the old filter: `data.validation.exclude_all_same_camera=true`.
 
 Generate test query/gallery retrieval results:
 
@@ -903,7 +918,8 @@ numbers use TTA off, so they are unchanged.
 - `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32, each run at least 10 seconds.
   The score uses the best FPS.
 - Also recorded: peak VRAM, weight-load time (reference), total weight-file bytes, two-run
-  determinism.
+  determinism. Stage bars are a separate diagnostic: they run after the same warmup as `latency_b1`,
+  but each stage still synchronizes CUDA, so they must not be added up to explain the scored cycle.
 
 Performance is 20% of the contest score: `10% × latency_score + 10% × throughput_score`.
 
@@ -924,9 +940,40 @@ size). Organizers pass the image directory and CSV (`image_id, x, y, w, h`) as a
 checked in source at the final review, not by the launch format.
 
 `notebooks/eva02/inference_profile.ipynb` charts stage costs, latency, FPS vs batch, VRAM, the
-weight inventory against the 2 GiB cap, and these performance scores. The contest payload is
-`weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A training Lightning `.ckpt`
-is not submitted: export it with `scripts/export_serving.py`.
+weight inventory against the 2 GiB cap, and these performance scores. Isolated H200 (`cuda:2`,
+TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.08):
+
+| Metric | Value |
+| --- | --- |
+| `latency_b1` | **15.9 ms** (p90 16.4 ms) |
+| `throughput` | **229.8 FPS** at batch 32 (batch 1 is 63.4 FPS) |
+| Peak VRAM | 1.14 GiB @ b1 → **1.18 GiB @ b32** |
+| Load | 4.8 s (compile graph is paid in warmup, not in timed extract) |
+| Serving `eva02.pt` | **~1.14 GiB** (under the 2 GiB cap) |
+| Determinism | bit-identical on two compiled extracts |
+| Official performance | latency_score **1.0**, throughput_score **1.0**, **0.200 / 0.20** |
+
+Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inference_model`):
+
+- Fused SDPA after RoPE (`model.attn_kernel=sdpa`). Math vs SDPA embeddings were bit-identical.
+  Forced Flash/mem-efficient SDPA did not beat H200 math at batch=1; keep SDPA for compile fusion.
+- `torch.compile(mode=reduce-overhead)` at load. Forward **19 → 5.7 ms**. Compile vs eager min
+  cosine 0.99988 on 32 crops. First-forward compile (~45 s) is warmup, not `latency_b1`.
+- 8-thread PIL decode for batch>1. That is what crosses 100 FPS. cv2 decode was slower at
+  batch=1 and is not used. ONNX/TensorRT was not required after compile+decode.
+
+![extract() stage breakdown after warmup](notebooks/eva02/readme_figs/inference_stages.png)
+
+*Batch-1 diagnostic after contest warmup. Decode (~8.1 ms) now dominates; compiled forward is
+~5.7 ms. Extra per-stage CUDA syncs mean the bars do not sum to `latency_b1`.*
+
+![Sustained extract() FPS vs batch](notebooks/eva02/readme_figs/inference_throughput.png)
+
+*Best bar is the contest throughput score. Batch 32 is 229.8 FPS on this H200.*
+
+The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A
+training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. Contest
+A5000 numbers will be slower than this H200; the same kernels still apply.
 
 ## Open-set refusal
 
@@ -967,8 +1014,37 @@ decisions; 310 open / 1231 closed queries):
 | cosine AND CatBoost | 0.821 | 0.806 | 0.855 | 0.965 |
 
 Cosine alone wins the contest score, so Docker serving is `eva02_threshold` (max cosine ≥ 0.6638).
-CatBoost and the two-head AND stay as optional presets (`eva02_model`, `eva02_ensemble`). Rank-average
-/ TabM remain OOF calibration only.
+That gap is small. Identity-bootstrap 95% CIs on the same outer-OOF decisions: cosine contest
+**0.825 [0.805, 0.843]**, CatBoost **0.817 [0.797, 0.835]**, AND **0.821 [0.801, 0.839]**. The paired
+cosine−CatBoost delta is **+0.008 [−0.002, +0.018] and includes 0**. Cosine is the serving head
+because it is simpler and not worse, not because the difference is significant. CatBoost and the
+two-head AND stay as optional presets (`eva02_model`, `eva02_ensemble`). Rank-average / TabM remain
+OOF calibration only.
+
+Eight fixed 20% identity-hold-out seeds `{0..7}` on every fold: re-fit cosine cuts average 0.653
+(std 0.038). The frozen serving cut 0.6638 scores contest 0.823 mean (std 0.018). After holding out
+open identities, subsample the remaining gallery to 750 (test size, keep at least one positive):
+frozen-cut contest 0.821 vs 0.825 on the full val gallery. Lookalike queries are the weak slice
+(contest 0.750, TNR 0.694 at the serving cut). Nested inner-CV does not undo HPO leakage on the
+embeddings. OOF F1/TNR calibrate the rule on fold extractors; transferring that threshold onto the
+full-retrain serving checkpoint is a practical choice, not a measurement of that checkpoint on new
+identities.
+
+![Identity-bootstrap contest CIs](notebooks/eva02/readme_figs/refusal_contest_ci.jpg)
+
+*2000 identity resamples of nested outer-OOF accept/refuse masks. Cosine and CatBoost CIs overlap.
+Notebook: `notebooks/eva02/refusal_analysis.ipynb`.*
+
+![Open-set hold-out seeds](notebooks/eva02/readme_figs/refusal_holdout_seeds.jpg)
+
+*Left: re-fit cosine threshold on eight fixed hold-out seeds. Dashed line is the serving cut
+0.6638. Right: contest score of that frozen cut. Notebook:
+`notebooks/eva02/refusal_analysis.ipynb`.*
+
+![Refusal difficulty slices](notebooks/eva02/readme_figs/refusal_slices.jpg)
+
+*Frozen serving cosine cut on nested eval packs. Lookalikes (impostor cosine ≥ 0.55) lose TNR.
+Notebook: `notebooks/eva02/refusal_analysis.ipynb`.*
 
 ![Outer-OOF refusal head comparison](notebooks/eva02/readme_figs/refusal_bars.jpg)
 
@@ -1025,7 +1101,7 @@ local `none` writes every query; the Docker image uses `eva02_threshold`. The ma
 rank-average across the test query batch.
 
 `notebooks/eva02/refusal_analysis.ipynb` compares the heads and ensembles on EVA02 5-fold OOF.
-`notebooks/eva02/inference_profile.ipynb` measures the contest extract() cycle (latency_b1, FPS, VRAM, 2 GiB weights).
+`notebooks/eva02/inference_profile.ipynb` measures the contest extract() cycle (15.9 ms / 230 FPS / 0.200 on isolated H200).
 
 ## Pretrained weights and offline use
 
@@ -1145,7 +1221,10 @@ refusal=eva02_threshold
 
 Override `CHECKPOINT` or pass extra Hydra flags after `retrieval`. Eval loads
 `ReIDModel(..., initialize_pretrained=False)`, so Hub/timm pretrained weights are not fetched at
-inference. `extra_data/`, tests, notebooks, and training runs are not copied into the image.
+inference. SDPA + `torch.compile` are enabled for llm2clip even when the Hydra default model is
+ConvNeXt: kernel flags overlay only if `model.backend` matches the checkpoint. The first
+forward pays compile (~45 s on H200); later batches use the compiled graph.
+`extra_data/`, tests, notebooks, and training runs are not copied into the image.
 
 ## Cross-validation
 
@@ -1196,8 +1275,10 @@ therefore not merged by this utility.
 ## Hyperparameter optimization
 
 The Optuna search runner trains all five folds concurrently, evaluates every best checkpoint, and
-maximizes the query-weighted OOF retrieval metric. Pass five GPU IDs with `--gpus`; there is no
-default assignment:
+maximizes the query-weighted OOF retrieval metric. `--metric` selects both the OOF objective and
+the Lightning `checkpointing.monitor` (`val/{metric}`), so `--metric=mAP@10` keeps checkpoint
+selection aligned with the contest ranking metric. An explicit `--override checkpointing.monitor=`
+is left in place. Pass five GPU IDs with `--gpus`; there is no default assignment:
 
 ```bash
 .venv/bin/python -m hpo.run_optuna_search \
@@ -1228,9 +1309,9 @@ trials must not share a `--study-name`. Both spaces sample input size and crop c
 sampling, backbone optimization controls, pooling, head, every supported loss and its parameters,
 optimizer, scheduler, regularization, every augmentation transform and parameter, and TTA. The
 selected model architecture, checkpoint, five-fold protocol, data paths, fold assignment, worker
-and loader settings, precision, deterministic mode, logging, checkpoint policy, metric protocol,
-and output paths stay fixed so trials remain comparable and operational settings do not consume
-search trials.
+and loader settings, precision, deterministic mode, logging, checkpoint `save_top_k` / `save_last`,
+metric protocol, and output paths stay fixed so trials remain comparable and operational settings do
+not consume search trials. `checkpointing.monitor` follows `--metric` unless `--override` sets it.
 
 Pass data or environment-specific Hydra settings with repeatable `--override` flags:
 
@@ -1354,7 +1435,7 @@ augmentations/  Config-driven image augmentation pipeline
 configs/        Hydra model, loss, optimizer, scheduler, refusal, and experiment presets
 dataset/        Annotation validation, folds, datasets, data module, pretrain loaders, and samplers
 extra_data/     Optional external identity-labeled crops for pretraining
-models/         Backbone adapters, pooling layers, and embedding model
+models/         Backbone adapters, pooling, embedding model, and inference kernels (SDPA / compile)
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: cosine Grad-Sim, Grad-Attention rollout, patch occlusion, CAM, Chefer
 matching/       EfficientLoFTR pair matching, homography inliers, cosine top-k rerank
