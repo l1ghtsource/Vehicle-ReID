@@ -32,4 +32,4 @@ RUN python -m pip install --no-cache-dir --no-deps . \
     && python scripts/verify_weights.py --root /app/weights/finetuned
 
 ENTRYPOINT ["python", "eval.py"]
-CMD ["checkpoint=/app/weights/finetuned/eva02.pt", "data.root=/data", "eval.split=test", "eval.output_dir=/runs/submission", "eval.top_k=10", "refusal=eva02_ensemble"]
+CMD ["checkpoint=/app/weights/finetuned/eva02.pt", "data.root=/data", "eval.split=test", "eval.output_dir=/runs/submission", "eval.top_k=10", "refusal=eva02_threshold"]

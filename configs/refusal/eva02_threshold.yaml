@@ -1,8 +1,9 @@
-# EVA02 + HDBSCAN mcs4 nested 5-fold inner-CV mean contest (0.7 F1 + 0.3 TNR) max-cosine operating point.
+# EVA02 labeled-only trial23 nested 5-fold inner-CV mean contest (0.7 F1 + 0.3 TNR) max-cosine operating point.
+# This is the Docker / serving accept rule. Fit on 20% identity-hold-out eval packs, not 50/50 train pairs.
 # Contest F1/TNR are micro over the query set; organizers do not re-threshold confidence.
-# Including a query_id in candidates.csv is the accept decision (cosine >= 0.7210).
+# Including a query_id in candidates.csv is the accept decision (cosine >= 0.6638).
 kind: threshold
-cosine_threshold: 0.7210
+cosine_threshold: 0.6638
 model_path: null
 model_threshold: null
 rank_threshold: null

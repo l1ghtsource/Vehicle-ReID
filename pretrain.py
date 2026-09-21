@@ -12,6 +12,7 @@ from omegaconf import OmegaConf, open_dict
 from dataset import PretrainDataModule
 from dataset.folds import fingerprint, split_fingerprint
 from dataset.pretrain import ssl_image_mode
+from models.backbones import TOKEN_MASK_BACKENDS
 from modules.lightning_module import ReIDModule, is_partial_validation
 
 
@@ -35,6 +36,10 @@ def apply_ssl_pretrain(cfg) -> None:
     with open_dict(cfg):
         cfg.loss = dino
         cfg.data.sampler.kind = "random"
+        if str(cfg.model.backend) not in TOKEN_MASK_BACKENDS:
+            for term in cfg.loss.terms:
+                if term.name == "dino":
+                    term.params.ibot_weight = 0.0
 
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="pretrain")

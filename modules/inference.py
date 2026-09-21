@@ -1,9 +1,13 @@
 from contextlib import nullcontext
 
+import numpy as np
 import torch
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
 from torchvision.transforms.functional import InterpolationMode, rotate
 
+from augmentations import build_transforms
+from dataset.images import VehicleDataset
 from models.input_size import scaled_hw, spatial_multiple
 
 
@@ -83,3 +87,22 @@ def embed_loader(model, loader, cfg, device):
     if not outputs:
         raise ValueError("Empty inference dataset")
     return torch.cat(outputs).numpy()
+
+
+def embed_frame(model, cfg, device, frame):
+    device = torch.device(device)
+    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
+    transform = build_transforms(cfg)
+    table = frame.reset_index(drop=True)
+    views = []
+    for context in contexts:
+        loader = DataLoader(
+            VehicleDataset(table, cfg, transform, context_pct=float(context)),
+            batch_size=int(cfg.data.batch_size_eval),
+            shuffle=False,
+            num_workers=int(cfg.data.num_workers),
+            pin_memory=bool(cfg.data.pin_memory),
+        )
+        views.append(embed_loader(model, loader, cfg, device))
+    emb = np.stack(views).mean(0)
+    return emb / np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)

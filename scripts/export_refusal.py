@@ -7,18 +7,17 @@ import numpy as np
 import pandas as pd
 import torch
 from hydra import compose, initialize_config_dir
-from torch.utils.data import DataLoader
 
-from augmentations import build_transforms
-from dataset.images import VehicleDataset
 from eval import load_model
-from modules.inference import embed_loader
+from modules.inference import embed_frame
 from postproc.retrieval import normalize
 from refusal import (
+    OPEN_SET_FRACTION,
     balanced_pack,
     decide,
     decision_metrics,
     fit_boosting,
+    open_set_pack,
     predict_boosting,
     ranking_metrics,
     save_boosting,
@@ -27,12 +26,8 @@ from refusal import (
 from scripts.export_serving import source_checkpoint
 from scripts.verify_weights import write_sha256sums
 
-DEFAULT_CV = Path("runs/cv/pseudo_iter001_mcs4")
+DEFAULT_CV = Path("runs/cv/eva02_trial23")
 DEFAULT_OUTPUT = Path("weights/finetuned/eva02_catboost.cbm")
-DEFAULT_THRESHOLD_CONFIGS = (
-    Path("configs/refusal/eva02_model.yaml"),
-    Path("configs/refusal/eva02_ensemble.yaml"),
-)
 DEFAULT_NESTED_CONFIGS = (
     Path("configs/refusal/eva02_threshold.yaml"),
     Path("configs/refusal/eva02_model.yaml"),
@@ -99,14 +94,7 @@ def load_embedder(checkpoint: Path, device: str, weights: str = "ema"):
 
 
 def embed_split(model, cfg, device, frame: pd.DataFrame) -> np.ndarray:
-    loader = DataLoader(
-        VehicleDataset(frame.reset_index(drop=True), cfg, build_transforms(cfg)),
-        batch_size=int(cfg.data.batch_size_eval),
-        shuffle=False,
-        num_workers=int(cfg.data.num_workers),
-        pin_memory=bool(cfg.data.pin_memory),
-    )
-    return normalize(embed_loader(model, loader, cfg, torch.device(device)))
+    return embed_frame(model, cfg, device, frame)
 
 
 def bind_checkpoint_embedder(checkpoint: Path, device: str, weights: str = "ema"):
@@ -131,15 +119,38 @@ def collect_packs(cv: Path, n_folds: int = N_FOLDS, k: int = 10, embed_fold=None
             query, gallery = read_split(directory)
             frame = pd.concat([query, gallery], ignore_index=True)
             pack = pack_from_embeddings(query, gallery, embed_fold(fold, frame))
+        qids = pack["query"].vehicle_id.to_numpy()
+        gids = pack["gallery"].vehicle_id.to_numpy()
         features, labels, cosine, hits = balanced_pack(
             pack["qe"],
             pack["ge"],
-            pack["query"].vehicle_id.to_numpy(),
-            pack["gallery"].vehicle_id.to_numpy(),
+            qids,
+            gids,
             k=k,
             with_embeddings=True,
         )
-        packs.append({"X": features, "y": labels, "cos": cosine, "top": hits})
+        eval_x, eval_y, eval_cos, eval_top, _held = open_set_pack(
+            pack["qe"],
+            pack["ge"],
+            qids,
+            gids,
+            k=k,
+            with_embeddings=True,
+            fraction=OPEN_SET_FRACTION,
+            seed=fold,
+        )
+        packs.append(
+            {
+                "X": features,
+                "y": labels,
+                "cos": cosine,
+                "top": hits,
+                "eval_X": eval_x,
+                "eval_y": eval_y,
+                "eval_cos": eval_cos,
+                "eval_top": eval_top,
+            }
+        )
     return packs
 
 
@@ -152,8 +163,16 @@ def collect_features(cv: Path, n_folds: int = N_FOLDS, k: int = 10, embed_fold=N
     )
 
 
-def concat_pack(packs, indices, key):
-    return np.concatenate([packs[index][key] for index in indices], 0)
+EVAL_FIELDS = {"X": "eval_X", "y": "eval_y", "cos": "eval_cos", "top": "eval_top"}
+
+
+def concat_pack(packs, indices, key, split="train"):
+    field = key if split == "train" else EVAL_FIELDS[key]
+    return np.concatenate([packs[index][field] for index in indices], 0)
+
+
+def public_head(report):
+    return {key: value for key, value in report.items() if key != "_parts"}
 
 
 def outer_metrics(y_parts, score_parts, top_parts, accept_parts):
@@ -173,21 +192,22 @@ def nested_cosine(packs, kind="contest"):
     for test_fold in range(n_folds):
         others = [fold for fold in range(n_folds) if fold != test_fold]
         picked = select_threshold(
-            concat_pack(packs, others, "y").astype(bool),
-            concat_pack(packs, others, "cos"),
-            concat_pack(packs, others, "top"),
+            concat_pack(packs, others, "y", split="eval").astype(bool),
+            concat_pack(packs, others, "cos", split="eval"),
+            concat_pack(packs, others, "top", split="eval"),
             kind=kind,
         )
         threshold = float(picked["threshold"])
         fold_thresholds.append(threshold)
-        y_parts.append(packs[test_fold]["y"])
-        score_parts.append(packs[test_fold]["cos"])
-        top_parts.append(packs[test_fold]["top"])
-        accept_parts.append(decide(packs[test_fold]["cos"], threshold))
+        y_parts.append(packs[test_fold]["eval_y"])
+        score_parts.append(packs[test_fold]["eval_cos"])
+        top_parts.append(packs[test_fold]["eval_top"])
+        accept_parts.append(decide(packs[test_fold]["eval_cos"], threshold))
     return {
         "fold_thresholds": fold_thresholds,
         "threshold": float(np.mean(fold_thresholds)),
         "outer": outer_metrics(y_parts, score_parts, top_parts, accept_parts),
+        "_parts": {"y": y_parts, "scores": score_parts, "top": top_parts, "accept": accept_parts},
     }
 
 
@@ -210,9 +230,9 @@ def nested_catboost(packs, seed=0, kind="contest"):
                 depth=4,
                 learning_rate=0.08,
             )
-            inner_y.append(packs[val_fold]["y"])
-            inner_top.append(packs[val_fold]["top"])
-            inner_scores.append(predict_boosting(model, packs[val_fold]["X"]))
+            inner_y.append(packs[val_fold]["eval_y"])
+            inner_top.append(packs[val_fold]["eval_top"])
+            inner_scores.append(predict_boosting(model, packs[val_fold]["eval_X"]))
         picked = select_threshold(
             np.concatenate(inner_y).astype(bool),
             np.concatenate(inner_scores),
@@ -229,15 +249,34 @@ def nested_catboost(packs, seed=0, kind="contest"):
             depth=4,
             learning_rate=0.08,
         )
-        scores = predict_boosting(model, packs[test_fold]["X"])
-        y_parts.append(packs[test_fold]["y"])
+        scores = predict_boosting(model, packs[test_fold]["eval_X"])
+        y_parts.append(packs[test_fold]["eval_y"])
         score_parts.append(scores)
-        top_parts.append(packs[test_fold]["top"])
+        top_parts.append(packs[test_fold]["eval_top"])
         accept_parts.append(decide(scores, threshold))
     return {
         "fold_thresholds": fold_thresholds,
         "threshold": float(np.mean(fold_thresholds)),
         "outer": outer_metrics(y_parts, score_parts, top_parts, accept_parts),
+        "_parts": {"y": y_parts, "scores": score_parts, "top": top_parts, "accept": accept_parts},
+    }
+
+
+def nested_serving(cosine, catboost):
+    cosine_parts = cosine["_parts"]
+    model_parts = catboost["_parts"]
+    accept_parts = [
+        cosine_ok & model_ok
+        for cosine_ok, model_ok in zip(cosine_parts["accept"], model_parts["accept"], strict=True)
+    ]
+    score_parts = [
+        np.minimum(cosine_score, model_score)
+        for cosine_score, model_score in zip(cosine_parts["scores"], model_parts["scores"], strict=True)
+    ]
+    return {
+        "cosine_threshold": round(float(cosine["threshold"]), 4),
+        "model_threshold": round(float(catboost["threshold"]), 4),
+        "outer": outer_metrics(cosine_parts["y"], score_parts, cosine_parts["top"], accept_parts),
     }
 
 
@@ -246,12 +285,14 @@ def nested_operating_points(cv: Path, n_folds: int = N_FOLDS, k: int = 10, seed:
     cosine = nested_cosine(packs)
     catboost = nested_catboost(packs, seed=seed)
     return {
-        "cosine": cosine,
-        "catboost": catboost,
-        "serving": {
-            "cosine_threshold": round(float(cosine["threshold"]), 4),
-            "model_threshold": round(float(catboost["threshold"]), 4),
+        "protocol": {
+            "train": "balanced_50_50",
+            "eval": "open_set_identities",
+            "open_set_fraction": OPEN_SET_FRACTION,
         },
+        "cosine": public_head(cosine),
+        "catboost": public_head(catboost),
+        "serving": nested_serving(cosine, catboost),
     }
 
 
@@ -297,20 +338,12 @@ def export_refusal(
     device: str = "cpu",
     weights: str = "ema",
     embed_fold=None,
-    update_config: list[Path] | None = None,
 ) -> Path:
     if checkpoint is not None and embed_fold is None:
         embed_fold = bind_checkpoint_embedder(checkpoint, device, weights)
-    features, labels, hits = collect_features(cv, n_folds=n_folds, k=k, embed_fold=embed_fold)
+    features, labels, _ = collect_features(cv, n_folds=n_folds, k=k, embed_fold=embed_fold)
     model = fit_boosting(features, labels, seed=seed, iterations=200, depth=4, learning_rate=0.08)
-    target = save_boosting(model, destination)
-    if update_config:
-        chosen = jsonable(select_threshold(labels.astype(bool), predict_boosting(model, features), hits))
-        meta = target.with_name(f"{target.stem}.threshold.json")
-        meta.write_text(json.dumps(chosen, indent=2))
-        for path in update_config:
-            update_refusal_config(path, float(chosen["threshold"]))
-    return target
+    return save_boosting(model, destination)
 
 
 def main():
@@ -329,8 +362,12 @@ def main():
     parser.add_argument("--update-config", nargs="*", type=Path, default=None)
     parser.add_argument("--sha256", action="store_true")
     args = parser.parse_args()
+    if args.update_config is not None:
+        if args.full_retrain:
+            raise ValueError("--update-config cannot be combined with --full-retrain")
+        if not args.nested:
+            raise ValueError("--update-config requires --nested")
     checkpoint = args.checkpoint
-    configs = args.update_config
     if args.nested:
         report = nested_operating_points(args.cv, n_folds=args.n_folds, k=args.k, seed=args.seed)
         nested_path = args.nested_output or (Path(args.cv) / "nested_thresholds.json")
@@ -338,22 +375,17 @@ def main():
         nested_path.write_text(json.dumps(report, indent=2))
         print(json.dumps(report["serving"], indent=2))
         print(f"{args.cv} -> {nested_path}")
-        if configs is not None:
-            nested_configs = list(configs) if configs else list(DEFAULT_NESTED_CONFIGS)
+        if args.update_config is not None:
+            nested_configs = list(args.update_config) if args.update_config else list(DEFAULT_NESTED_CONFIGS)
             apply_nested_configs(
                 nested_configs,
                 report["serving"]["cosine_threshold"],
                 report["serving"]["model_threshold"],
             )
-            configs = None
+        if not args.full_retrain:
+            return
     if args.full_retrain:
         checkpoint = checkpoint or source_checkpoint(None)
-        if configs is not None and not configs:
-            configs = list(DEFAULT_THRESHOLD_CONFIGS)
-    elif configs:
-        raise ValueError("--update-config requires --full-retrain or --nested")
-    if not args.full_retrain and args.nested:
-        return
     target = export_refusal(
         args.cv,
         args.output,
@@ -363,7 +395,6 @@ def main():
         checkpoint=checkpoint,
         device=args.device,
         weights=args.weights,
-        update_config=configs,
     )
     print(f"{args.cv} -> {target} ({target.stat().st_size} bytes)")
     if args.sha256:

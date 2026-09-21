@@ -5,6 +5,7 @@ import torch
 from refusal import (
     CONTEST_F1_WEIGHT,
     CONTEST_TNR_WEIGHT,
+    OPEN_SET_FRACTION,
     STAT_NAMES,
     RefusalTabM,
     balanced_pack,
@@ -24,6 +25,7 @@ from refusal import (
     load_boosting,
     mask_gallery,
     max_cosine,
+    open_set_pack,
     open_set_split,
     predict_boosting,
     predict_tabm,
@@ -31,6 +33,7 @@ from refusal import (
     ranking_metrics,
     refusal_accept,
     save_boosting,
+    scored_pack,
     select_threshold,
     similarities,
     stat_vector,
@@ -115,6 +118,18 @@ def test_protocol_open_set_and_masks():
     assert packed_cos[0] > packed_cos[1]
     assert packed_hit.dtype == bool and not packed_hit[1]
     assert packed_hit[0] == top_hit(query[:1], gallery, qids[:1], gids)[0]
+    eval_x, eval_y, eval_cos, eval_hit, held_ids = open_set_pack(
+        query, gallery, qids, gids, k=4, with_embeddings=False, fraction=0.2, seed=0
+    )
+    assert len(eval_y) == len(qids)
+    assert 0 < float(eval_y.mean()) < 1
+    assert set(held_ids.tolist()).issubset(set(qids.tolist()))
+    assert eval_cos.shape == eval_y.shape == eval_hit.shape
+    scored_x, scored_y, scored_cos, scored_hit = scored_pack(
+        query, gallery, qids, gids, k=4, with_embeddings=False
+    )
+    assert scored_y.tolist() == [1, 1, 1] and scored_x.shape[0] == 3
+    assert scored_cos.shape == scored_hit.shape == scored_y.shape
     hit = top_hit(query, gallery, qids, gids)
     assert hit.shape == (3,) and hit.dtype == bool
     with pytest.raises(ValueError, match="query identities"):
@@ -223,6 +238,21 @@ def test_contest_objective_beats_max_f1_on_open_set_tradeoff():
     assert contest["tnr"] == pytest.approx(0.5)
     assert contest["contest"] == pytest.approx(0.7625)
     assert contest["threshold"] == pytest.approx(0.95)
+
+
+def test_contest_threshold_depends_on_prevalence():
+    closed = np.array([0.95, 0.93, 0.91, 0.89, 0.60])
+    open_scores = np.array([0.88, 0.86, 0.84, 0.50, 0.40])
+    y_balanced = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
+    scores_balanced = np.concatenate([closed, open_scores])
+    top_balanced = y_balanced.astype(bool)
+    y_open = np.array([1, 1, 1, 1, 0])
+    scores_open = np.array([0.95, 0.93, 0.91, 0.60, 0.88])
+    top_open = y_open.astype(bool)
+    balanced = select_threshold(y_balanced, scores_balanced, top_balanced, kind="contest")
+    realistic = select_threshold(y_open, scores_open, top_open, kind="contest")
+    assert balanced["threshold"] != realistic["threshold"]
+    assert OPEN_SET_FRACTION == 0.2
 
 
 def test_pooled_oof_uses_per_fold_inner_thresholds():

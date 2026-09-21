@@ -128,6 +128,7 @@ def test_current_best_tuned_matches_eva02_oof():
     assert list(swapped.pretrain.datasets) == ["vric"]
     assert list(ssl.pretrain.datasets) == ["test_train_ssl"]
     assert ssl.loss.terms[0].name == "dino"
+    assert float(ssl.loss.terms[0].params.ibot_weight) == 1.0
     assert ssl.data.sampler.kind == "random"
     assert ssl_image_mode("test_train_ssl") == "crop"
     assert ssl_image_mode("test_train_ssl_crop") == "crop"
@@ -294,9 +295,16 @@ def test_apply_ssl_pretrain_guards(data_cfg, tmp_path):
     pretrain_module.apply_ssl_pretrain(cfg)
     assert cfg.data.sampler.kind == "random"
     assert [str(term.name) for term in cfg.loss.terms] == ["dino"]
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 0.0
     cfg.pretrain.datasets = [SSL_FULL]
     pretrain_module.apply_ssl_pretrain(cfg)
     assert [str(term.name) for term in cfg.loss.terms] == ["dino"]
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 0.0
+    with open_dict(cfg):
+        cfg.model.backend = "llm2clip"
+        cfg.data.sampler.kind = "pk"
+    pretrain_module.apply_ssl_pretrain(cfg)
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 1.0
 
 
 def test_pretrain_main_applies_ssl(data_cfg, tmp_path, monkeypatch):

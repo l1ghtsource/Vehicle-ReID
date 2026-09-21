@@ -237,15 +237,15 @@ class ProbeModel(nn.Module):
         self.weight = nn.Parameter(torch.ones(1))
 
 
-def fake_zero_shot_embeddings(model, loader, cfg, device):
-    size = len(loader.dataset)
+def fake_zero_shot_embeddings(model, cfg, device, frame):
+    size = len(frame)
     values = np.arange(size * 8, dtype=np.float32).reshape(size, 8) + 1
     return values / np.linalg.norm(values, axis=1, keepdims=True)
 
 
 def test_zero_shot_main(data_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(zero_shot, "ReIDModel", ProbeModel)
-    monkeypatch.setattr(zero_shot, "embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr(zero_shot, "embed_frame", fake_zero_shot_embeddings)
     monkeypatch.setattr(zero_shot.L, "seed_everything", lambda *args, **kwargs: None)
     out = tmp_path / "probe"
     monkeypatch.setattr(
@@ -302,7 +302,7 @@ def test_zero_shot_main(data_cfg, tmp_path, monkeypatch):
     torch.use_deterministic_algorithms(False)
 
     monkeypatch.setattr(models, "ReIDModel", ProbeModel)
-    monkeypatch.setattr("modules.inference.embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr("modules.inference.embed_frame", fake_zero_shot_embeddings)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -460,19 +460,6 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     )
     assert written.is_file()
     assert not retrained.with_name("full.threshold.json").is_file()
-    tuned = tmp_path / "heads" / "tuned.cbm"
-    written = export_refusal.export_refusal(
-        cv,
-        tuned,
-        seed=0,
-        n_folds=2,
-        k=2,
-        embed_fold=fake_embed,
-        update_config=[yaml_path],
-    )
-    meta = json.loads(tuned.with_name("tuned.threshold.json").read_text())
-    assert "threshold" in meta
-    assert "model_threshold:" in yaml_path.read_text()
     bad_yaml = tmp_path / "bad.yaml"
     bad_yaml.write_text("kind: model\n")
     with pytest.raises(ValueError, match="model_threshold"):
@@ -501,16 +488,11 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     monkeypatch.setattr(export_refusal, "load_model", lambda cfg: (_Model(), cfg, {}, "ema"))
     model, cfg, choice = export_refusal.load_embedder(tmp_path / "x.pt", "cpu")
     assert choice == "ema"
-    monkeypatch.setattr(export_refusal, "VehicleDataset", lambda frame, cfg, tf: list(range(len(frame))))
-    monkeypatch.setattr(export_refusal, "build_transforms", lambda cfg: None)
-    monkeypatch.setattr(export_refusal, "DataLoader", lambda ds, **kwargs: ds)
     monkeypatch.setattr(
         export_refusal,
-        "embed_loader",
-        lambda model, loader, cfg, device: np.ones((len(loader), 4), dtype=np.float32),
+        "embed_frame",
+        lambda model, cfg, device, frame: np.ones((len(frame), 4), dtype=np.float32),
     )
-    data = type("D", (), {"batch_size_eval": 2, "num_workers": 0, "pin_memory": False})()
-    cfg = type("C", (), {"data": data})()
     stacked = export_refusal.embed_split(model, cfg, "cpu", pd.DataFrame({"image_id": ["a", "b"]}))
     assert stacked.shape == (2, 4)
 
@@ -541,13 +523,57 @@ def test_export_refusal_head(tmp_path, monkeypatch):
             "2",
             "--device",
             "cpu",
+        ],
+    )
+    export_refusal.main()
+    assert (tmp_path / "cli-full.cbm").is_file()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "leaky.cbm"),
+            "--n-folds",
+            "1",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
             "--update-config",
         ],
     )
-    monkeypatch.setattr(export_refusal, "DEFAULT_THRESHOLD_CONFIGS", (yaml_path,))
-    yaml_path.write_text("kind: model\nmodel_threshold: 0.1234\n")
-    export_refusal.main()
-    assert (tmp_path / "cli-full.cbm").is_file()
+    with pytest.raises(ValueError, match="cannot be combined"):
+        export_refusal.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "nested-leaky.cbm"),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+            "--update-config",
+        ],
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        export_refusal.main()
     monkeypatch.setattr(
         sys,
         "argv",
@@ -561,7 +587,7 @@ def test_export_refusal_head(tmp_path, monkeypatch):
             str(yaml_path),
         ],
     )
-    with pytest.raises(ValueError, match="--full-retrain"):
+    with pytest.raises(ValueError, match="requires --nested"):
         export_refusal.main()
     monkeypatch.setattr(
         sys,
@@ -622,7 +648,26 @@ def test_export_refusal_nested(tmp_path, monkeypatch):
     report = export_refusal.nested_operating_points(cv, n_folds=3, k=2, seed=0, embed_fold=fake_embed)
     assert "cosine_threshold" in report["serving"]
     assert "model_threshold" in report["serving"]
+    assert report["protocol"]["eval"] == "open_set_identities"
+    assert report["cosine"]["outer"]["n"] == 6
+    assert report["catboost"]["outer"]["n"] == 6
+    assert report["serving"]["outer"]["n"] == 6
+    assert "_parts" not in report["cosine"]
     assert len(report["cosine"]["fold_thresholds"]) == 3
+    cosine_accept = export_refusal.nested_cosine(packs)
+    catboost_accept = export_refusal.nested_catboost(packs, seed=0)
+    serving = export_refusal.nested_serving(cosine_accept, catboost_accept)
+    cosine_mask = np.concatenate(cosine_accept["_parts"]["accept"])
+    model_mask = np.concatenate(catboost_accept["_parts"]["accept"])
+    serving_parts = zip(
+        cosine_accept["_parts"]["accept"],
+        catboost_accept["_parts"]["accept"],
+        strict=True,
+    )
+    serving_mask = np.concatenate([left & right for left, right in serving_parts])
+    assert serving["outer"]["n"] == 6
+    assert int(serving_mask.sum()) <= int(cosine_mask.sum())
+    assert int(serving_mask.sum()) <= int(model_mask.sum())
     cosine_yaml = tmp_path / "cosine.yaml"
     model_yaml = tmp_path / "model.yaml"
     both_yaml = tmp_path / "both.yaml"
@@ -663,6 +708,8 @@ def test_export_refusal_nested(tmp_path, monkeypatch):
     payload = json.loads(nested_json.read_text())
     assert "cosine_threshold" in payload["serving"]
     assert "model_threshold" in payload["serving"]
+    assert "outer" in payload["serving"]
+    assert "contest" in payload["serving"]["outer"]
     monkeypatch.setattr(
         sys,
         "argv",

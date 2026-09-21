@@ -1,5 +1,6 @@
 import hashlib
 import runpy
+import subprocess
 import sys
 from pathlib import Path
 
@@ -32,13 +33,13 @@ def test_docker_offline_image_pins_and_bakes_weights():
     assert "scripts/verify_weights.py --root /app/weights/finetuned" in dockerfile
     assert "checkpoint=/app/weights/finetuned/eva02.pt" in dockerfile
     assert "eval.top_k=10" in dockerfile
-    assert "refusal=eva02_ensemble" in dockerfile
+    assert "refusal=eva02_threshold" in dockerfile
     assert "consul-tech" not in dockerfile
     assert "network_mode: none" in compose
     assert "gpus: all" in compose
     assert "./weights:/app/weights" not in compose
     assert "CHECKPOINT:-/app/weights/finetuned/eva02.pt" in compose
-    assert "refusal=eva02_ensemble" in compose
+    assert "refusal=eva02_threshold" in compose
     assert "!weights/finetuned/" in dockerignore
     assert "extra_data" in dockerignore
     assert "filter=lfs" in gitattributes
@@ -150,3 +151,23 @@ def test_download_weights_verify_digests(tmp_path, monkeypatch):
     radio["sha256"] = {"model.safetensors": _digest(b"other")}
     with pytest.raises(ValueError, match="expected"):
         download_weights.main()
+
+
+def test_ruff_and_ty_pass_on_notebooks():
+    notebooks = ROOT / "notebooks"
+    ruff = subprocess.run(
+        [sys.executable, "-m", "ruff", "check", str(notebooks)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert ruff.returncode == 0, ruff.stdout + ruff.stderr
+    typed = subprocess.run(
+        [sys.executable, "-m", "ty", "check", str(notebooks)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert typed.returncode == 0, typed.stdout + typed.stderr

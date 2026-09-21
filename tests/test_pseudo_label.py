@@ -125,7 +125,13 @@ def test_run_pseudo_label_writes_train(tmp_path, monkeypatch):
     assert len(written) == 20
     assert written.vehicle_id.max() == 3
     meta = json.loads((output / "summary.json").read_text())
-    assert meta["next_train"]["data.val_source_csv"] == str(train_csv)
+    assert meta["checkpoint"] == str(tmp_path / "eva02.pt")
+    assert meta["next_train"] == {
+        "data.train_csv": str(output / "train.csv"),
+        "data.folds_file": str(output / "folds.csv"),
+        "data.val_source_csv": str(train_csv),
+    }
+    assert "init_checkpoint" not in meta["next_train"]
     with pytest.raises(ValueError, match="already exists"):
         pseudo_label.run_pseudo_label(
             output=output,

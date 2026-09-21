@@ -47,7 +47,10 @@ class DummyNet(nn.Module):
 
     def forward_features(self, x, return_all_features=False, bool_masked_pos=None):
         if return_all_features:
-            return torch.ones(len(x), self.num_features, 2, 2)
+            out = torch.ones(len(x), self.num_features, 2, 2)
+            if bool_masked_pos is not None and bool_masked_pos.any():
+                return out + 1
+            return out
         return self.output if self.output is not None else torch.ones(len(x), self.num_features, 2, 2)
 
     def forward(self, x=None, pixel_values=None, output_hidden_states=False):
@@ -117,6 +120,9 @@ def test_timm_backbone_paths(cfg, tmp_path, monkeypatch):
     assert calls[-1][1]["img_size"] == tuple(int(value) for value in cfg.data.image_size)
     out = model(torch.zeros(2, 3, 8, 8))
     assert [item.shape[1] for item in out] == [3, 4]
+    assert not model.supports_token_mask
+    with pytest.raises(ValueError, match="token masks"):
+        model(torch.zeros(2, 3, 8, 8), mask=torch.zeros(2, 4, dtype=torch.bool))
 
     cfg.model.features_only = False
     cfg.model.feature_dims = [4]
@@ -150,6 +156,9 @@ def test_radio_backbone_paths(cfg, tmp_path, monkeypatch):
     model = Backbone(cfg.model, cfg.data.image_size)
     assert model.dims == [6]
     assert model(torch.zeros(2, 3, 8, 8))[0].shape[1] == 6
+    assert not model.supports_token_mask
+    with pytest.raises(ValueError, match="token masks"):
+        model(torch.zeros(2, 3, 8, 8), mask=torch.zeros(2, 4, dtype=torch.bool))
     assert nets[-1].checkpointing
 
     cfg.model.pretrained = True
@@ -196,6 +205,9 @@ def test_hf_backbone_paths(cfg, monkeypatch):
     assert configs[0].drop_path_rate == 0.3
     assert model.net.checkpointing
     assert model(torch.zeros(2, 3, 8, 8))[0].shape[-1] == 5
+    assert not model.supports_token_mask
+    with pytest.raises(ValueError, match="token masks"):
+        model(torch.zeros(2, 3, 8, 8), mask=torch.zeros(2, 4, dtype=torch.bool))
 
     cfg.model.hidden_indices = None
     cfg.model.pretrained = True
@@ -230,9 +242,12 @@ def test_llm_custom_unknown_and_forward_guards(cfg, tmp_path, monkeypatch):
     model = Backbone(cfg.model, [336, 336])
     assert list(model.net.loaded[0]) == ["weight"]
     assert hasattr(model.net, "mask_token")
-    assert model(torch.zeros(2, 3, 4, 4))[0].shape == (2, 1024, 2, 2)
-    masked = model(torch.zeros(2, 3, 4, 4), mask=torch.zeros(2, 4, dtype=torch.bool))
+    assert model.supports_token_mask
+    plain = model(torch.zeros(2, 3, 4, 4))
+    assert plain[0].shape == (2, 1024, 2, 2)
+    masked = model(torch.zeros(2, 3, 4, 4), mask=torch.ones(2, 4, dtype=torch.bool))
     assert masked[0].shape == (2, 1024, 2, 2)
+    assert not torch.equal(plain[0], masked[0])
 
     cfg.model.backend = "custom"
     cfg.model.pretrained = False
@@ -242,6 +257,9 @@ def test_llm_custom_unknown_and_forward_guards(cfg, tmp_path, monkeypatch):
     model = Backbone(cfg.model, [8, 8])
     result = model(torch.zeros(2, 4, 4, 3))
     assert result[0].shape == (2, 3, 4, 4)
+    assert not model.supports_token_mask
+    with pytest.raises(ValueError, match="token masks"):
+        model(torch.zeros(2, 4, 4, 3), mask=torch.zeros(2, 4, dtype=torch.bool))
     model.dims = [3, 3]
     with pytest.raises(ValueError, match="levels"):
         model(torch.zeros(2, 4, 4, 3))
@@ -290,8 +308,10 @@ def test_reid_freeze_and_local_guard(cfg):
     before = bn.num_batches_tracked
     assert before is not None
     tracked = before.detach().clone()
-    masked = model(torch.randn(2, 3, 64, 64), mask=torch.zeros(2, 4, dtype=torch.bool))
-    assert masked["embedding"].shape[0] == 2
+    frozen = model(torch.randn(2, 3, 64, 64))
+    assert frozen["embedding"].shape[0] == 2
+    with pytest.raises(ValueError, match="token masks"):
+        model(torch.randn(2, 3, 64, 64), mask=torch.zeros(2, 4, dtype=torch.bool))
     frozen_count = bn.num_batches_tracked
     assert frozen_count is not None
     assert torch.equal(frozen_count, tracked)

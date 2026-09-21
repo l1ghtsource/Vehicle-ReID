@@ -17,6 +17,8 @@ from third_party.radio.hf_model import RADIOConfig, RADIOModel
 
 from .input_size import spatial_multiple
 
+TOKEN_MASK_BACKENDS = frozenset({"llm2clip"})
+
 
 def container_dict(value: Any) -> dict[str, Any]:
     container = OmegaConf.to_container(value, resolve=True)
@@ -169,7 +171,13 @@ class Backbone(nn.Module):
         if cfg.checkpoint_path and cfg.backend not in {"llm2clip", "radio"} and initialize_pretrained:
             self.net.load_state_dict(load_state(cfg.checkpoint_path), strict=True)
 
+    @property
+    def supports_token_mask(self) -> bool:
+        return self.backend in TOKEN_MASK_BACKENDS
+
     def forward(self, x, mask=None):
+        if mask is not None and not self.supports_token_mask:
+            raise ValueError("iBOT token masks are only applied by llm2clip; set ibot_weight=0")
         c = self.cfg
         if self.backend == "timm":
             out = self.net(x) if c.features_only else self.net.forward_features(x)

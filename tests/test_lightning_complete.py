@@ -25,13 +25,21 @@ class TinyNet(nn.Module):
         self.config = TinyConfig()
 
 
+class TinyBackbone(nn.Module):
+    supports_token_mask = True
+
+    def __init__(self):
+        super().__init__()
+        self.stem = nn.Linear(3, 3)
+        self.dims = [4]
+        self.net = TinyNet()
+
+
 class TinyReID(nn.Module):
     def __init__(self, cfg, initialize_pretrained=True):
         super().__init__()
         self.linear = nn.Linear(3, 4)
-        self.backbone = nn.Linear(3, 3)
-        self.backbone.dims = [4]
-        self.backbone.net = TinyNet()
+        self.backbone = TinyBackbone()
         self.register_buffer("running", torch.ones(1))
         self.embedding_dim = 4
         self.frozen = False
@@ -306,6 +314,70 @@ def test_dino_training_step_requires_view_and_ema(cfg, monkeypatch):
     module.ema = None
     with pytest.raises(ValueError, match="requires EMA"):
         module.training_step(payload, 0)
+
+
+def test_ibot_requires_token_mask_backbone(cfg, monkeypatch):
+    class NoMaskBackbone(TinyBackbone):
+        supports_token_mask = False
+
+    class CallableBackbone(TinyBackbone):
+        def supports_token_mask(self):
+            return False
+
+    class NoMask(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.backbone = NoMaskBackbone()
+
+    class CallableMask(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.backbone = CallableBackbone()
+
+    dino = {
+        "name": "dino",
+        "weight": 1,
+        "feature": "neck",
+        "params": {
+            "hidden_dim": 8,
+            "bottleneck_dim": 4,
+            "out_dim": 8,
+            "sinkhorn_iters": 1,
+            "ibot_weight": 1.0,
+        },
+    }
+    cfg.train.ema.enabled = True
+    cfg.loss.terms = [OmegaConf.create(dino)]
+    monkeypatch.setattr(lightning_module, "ReIDModel", NoMask)
+    with pytest.raises(ValueError, match="token masks"):
+        ReIDModule(cfg, 2)
+    monkeypatch.setattr(lightning_module, "ReIDModel", CallableMask)
+    with pytest.raises(ValueError, match="token masks"):
+        ReIDModule(cfg, 2)
+    cfg.loss.terms[0].params.ibot_weight = 0.0
+    seen = {}
+
+    class Spy(TinyReID):
+        def forward(self, image, mask=None):
+            seen["mask"] = mask
+            return super().forward(image, mask)
+
+    monkeypatch.setattr(lightning_module, "ReIDModel", Spy)
+    module = ReIDModule(cfg, 2)
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    module.ema = EMA(module.model)
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert seen["mask"] is None
 
 
 class Scale:

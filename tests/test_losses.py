@@ -112,9 +112,21 @@ def test_dino_views_koleo_and_invalid_params():
     empty_mask = torch.zeros(4, 5, dtype=torch.bool)
     gram_only = tiny(pair.detach(), pair.detach(), patches.detach(), patches.detach(), empty_mask)
     assert torch.isfinite(gram_only)
-    wide = DINO(
-        4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, patch_dim=6, sinkhorn_iters=1
+    empty_ibot = DINO(
+        4,
+        hidden_dim=8,
+        bottleneck_dim=4,
+        out_dim=8,
+        nlayers=1,
+        sinkhorn_iters=1,
+        gram_weight=0.0,
     )
+    empty_patches = torch.randn(4, 5, 4, requires_grad=True)
+    empty_loss = empty_ibot(pair.detach(), pair.detach(), empty_patches, empty_patches.detach(), empty_mask)
+    empty_loss.backward()
+    assert torch.isfinite(empty_loss)
+    assert empty_patches.grad is not None
+    wide = DINO(4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, patch_dim=6, sinkhorn_iters=1)
     wide_patches = torch.randn(4, 3, 6, requires_grad=True)
     wide_mask = torch.ones(4, 3, dtype=torch.bool)
     wide_loss = wide(pair.detach(), pair.detach(), wide_patches, wide_patches.detach(), wide_mask)

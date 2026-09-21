@@ -14,13 +14,24 @@ from .metrics import (
     select_threshold,
     sweep_thresholds,
 )
-from .protocol import balanced_pack, balanced_pairs, has_match, mask_gallery, open_set_split, top_hit
+from .protocol import (
+    OPEN_SET_FRACTION,
+    balanced_pack,
+    balanced_pairs,
+    has_match,
+    mask_gallery,
+    open_set_pack,
+    open_set_split,
+    scored_pack,
+    top_hit,
+)
 from .tabm import RefusalTabM, fit_tabm, predict_tabm
 from .threshold import gap12, max_cosine
 
 __all__ = [
     "CONTEST_F1_WEIGHT",
     "CONTEST_TNR_WEIGHT",
+    "OPEN_SET_FRACTION",
     "STAT_NAMES",
     "RefusalTabM",
     "balanced_pack",
@@ -41,6 +52,7 @@ __all__ = [
     "load_boosting",
     "mask_gallery",
     "max_cosine",
+    "open_set_pack",
     "open_set_split",
     "predict_boosting",
     "predict_tabm",
@@ -48,6 +60,7 @@ __all__ = [
     "ranking_metrics",
     "refusal_accept",
     "save_boosting",
+    "scored_pack",
     "select_threshold",
     "similarities",
     "stat_vector",

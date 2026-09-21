@@ -1,5 +1,7 @@
 # DINOv3-style SSL: DINO (Sinkhorn) + iBOT + KoLeo + Gram vs EMA teacher.
 # Prototype heads are discarded at init_checkpoint; retrieval uses the ReID neck.
+# iBOT token masking is llm2clip/EVA02 only. Other backbones must set ibot_weight=0
+# (SSL pretrain does that when model.backend is not llm2clip).
 # LLM2CLIP keeps two 336 global views (RoPE is locked); iBOT masks EVA02 patch tokens.
 terms:
   - name: dino

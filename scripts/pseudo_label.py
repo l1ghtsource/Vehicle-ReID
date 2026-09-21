@@ -195,7 +195,6 @@ def run_pseudo_label(
             "data.train_csv": str(output / "train.csv"),
             "data.folds_file": str(output / "folds.csv"),
             "data.val_source_csv": str(train_csv),
-            "init_checkpoint": str(ckpt),
         },
     }
     write_artifacts(

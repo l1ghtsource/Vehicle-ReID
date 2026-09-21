@@ -86,6 +86,14 @@ class ReIDModule(L.LightningModule):
             raise ValueError("AdaSP requires PK sampler")
         if any(t.name == "dino" for t in cfg.loss.terms) and not cfg.train.ema.enabled:
             raise ValueError("DINO SSL requires train.ema.enabled")
+        if any(isinstance(term, DINO) and term.ibot_weight > 0 for term in self.losses.terms):
+            supported = getattr(self.model.backbone, "supports_token_mask", False)
+            if callable(supported):
+                supported = supported()
+            if not supported:
+                raise ValueError(
+                    "iBOT requires a backbone that applies token masks (llm2clip); set ibot_weight=0"
+                )
         if cfg.train.awp.enabled and cfg.train.accumulate_grad_batches != 1:
             raise ValueError(
                 "AWP currently requires train.accumulate_grad_batches=1 (clean per-batch perturbation)"
@@ -132,7 +140,7 @@ class ReIDModule(L.LightningModule):
                 teacher = self.model(images)
             mask = None
             dino_term = next(term for term in self.losses.terms if isinstance(term, DINO))
-            if "patches" in teacher:
+            if dino_term.ibot_weight > 0 and "patches" in teacher:
                 mask = dino_term.sample_masks(
                     teacher["patches"].shape[0], teacher["patches"].shape[1], teacher["patches"].device
                 )

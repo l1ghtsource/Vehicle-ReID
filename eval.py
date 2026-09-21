@@ -11,13 +11,10 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.core.override_parser.overrides_parser import OverridesParser
 from hydra.errors import HydraException
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
 
-from augmentations import build_transforms
 from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
-from dataset.images import VehicleDataset
 from models import ReIDModel
-from modules.inference import embed_loader, tta_context_pcts
+from modules.inference import embed_frame
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
 from refusal import refusal_accept, write_candidates
@@ -50,6 +47,11 @@ def override_key(item: str) -> str | None:
     return key
 
 
+EVAL_PROTOCOL = {
+    "data.validation.exclude_all_same_camera": False,
+}
+
+
 def remount_data_root(saved, effective, overridden: set[str]) -> None:
     if "data.root" not in overridden:
         return
@@ -62,6 +64,19 @@ def remount_data_root(saved, effective, overridden: set[str]) -> None:
         current = Path(str(OmegaConf.select(effective, key)))
         if current.is_relative_to(old_root):
             OmegaConf.update(effective, key, str(new_root / current.relative_to(old_root)))
+
+
+def protocol_overridden(key: str, overridden: set[str]) -> bool:
+    return any(key == item or key.startswith(f"{item}.") for item in overridden)
+
+
+def apply_eval_protocol(cfg, effective, overridden: set[str]) -> None:
+    missing = object()
+    for key, default in EVAL_PROTOCOL.items():
+        if protocol_overridden(key, overridden):
+            continue
+        value = OmegaConf.select(cfg, key, default=missing)
+        OmegaConf.update(effective, key, default if value is missing else value)
 
 
 def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
@@ -96,6 +111,7 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
             continue
         OmegaConf.update(effective, key, value, merge=True)
     remount_data_root(saved, effective, overridden)
+    apply_eval_protocol(cfg, effective, overridden)
     return effective
 
 
@@ -220,20 +236,7 @@ def main(cfg):
         g_indices = np.arange(len(q), len(frame))
     else:
         raise ValueError("eval.split must be val/test")
-    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
-    views = []
-    for context in contexts:
-        ds = VehicleDataset(frame, cfg, build_transforms(cfg), context_pct=float(context))
-        loader = DataLoader(
-            ds,
-            batch_size=cfg.data.batch_size_eval,
-            shuffle=False,
-            num_workers=cfg.data.num_workers,
-            pin_memory=cfg.data.pin_memory,
-        )
-        views.append(embed_loader(model, loader, cfg, device))
-    emb = np.stack(views).mean(0)
-    emb /= np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
+    emb = embed_frame(model, cfg, device, frame)
     qe, ge = emb[q_indices], emb[g_indices]
     distance, expanded_q, expanded_g = postprocess(qe, ge, cfg.postproc)
     out = Path(cfg.eval.output_dir)

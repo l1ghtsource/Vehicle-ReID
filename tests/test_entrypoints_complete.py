@@ -340,6 +340,52 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert str(effective.refusal.model_path) == "/tmp/refuse.cbm"
 
 
+def test_overlay_eval_migrates_h7_junk_protocol(cfg):
+    saved = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    saved.data.validation.exclude_all_same_camera = True
+    migrated = eval_module.overlay_eval_config(saved, cfg, [])
+    assert bool(migrated.data.validation.exclude_all_same_camera) is False
+    sibling = eval_module.overlay_eval_config(saved, cfg, ["data.fold=1"])
+    assert bool(sibling.data.validation.exclude_all_same_camera) is False
+    cfg.data.validation.exclude_all_same_camera = True
+    kept = eval_module.overlay_eval_config(
+        saved,
+        cfg,
+        ["data.validation.exclude_all_same_camera=true"],
+    )
+    assert bool(kept.data.validation.exclude_all_same_camera) is True
+    grouped = eval_module.overlay_eval_config(
+        saved,
+        cfg,
+        ["data.validation={exclude_all_same_camera: true}"],
+    )
+    assert bool(grouped.data.validation.exclude_all_same_camera) is True
+    assert eval_module.protocol_overridden(
+        "data.validation.exclude_all_same_camera",
+        {"data.validation"},
+    )
+    assert not eval_module.protocol_overridden(
+        "data.validation.exclude_all_same_camera",
+        {"data.fold"},
+    )
+    stub = OmegaConf.create(
+        {
+            "checkpoint": "weights.pt",
+            "eval": {
+                "split": "val",
+                "device": "cpu",
+                "output_dir": "out",
+                "weights": "raw",
+                "top_k": 10,
+                "save_distances": False,
+                "precision": "fp32",
+            },
+        }
+    )
+    defaulted = eval_module.overlay_eval_config(saved, stub, [])
+    assert bool(defaulted.data.validation.exclude_all_same_camera) is False
+
+
 def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(eval_module, "ReIDModel", LoadedModel)
     path = tmp_path / "model.ckpt"
@@ -405,13 +451,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7210)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6638)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.6839)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.5540)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7210)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.6839)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6638)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.5540)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 
@@ -421,8 +467,8 @@ class EvalModel(nn.Module):
         return image
 
 
-def fake_embeddings(model, loader, cfg, device):
-    size = len(loader.dataset)
+def fake_embeddings(model, cfg, device, frame):
+    size = len(frame)
     values = np.arange(size * 8, dtype=np.float32).reshape(size, 8) + 1
     return values / np.linalg.norm(values, axis=1, keepdims=True)
 
@@ -441,7 +487,7 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
         "load_model",
         lambda cfg: (EvalModel(), cfg, checkpoint, "raw"),
     )
-    monkeypatch.setattr(eval_module, "embed_loader", fake_embeddings)
+    monkeypatch.setattr(eval_module, "embed_frame", fake_embeddings)
     monkeypatch.setattr(eval_module.L, "seed_everything", lambda *args, **kwargs: None)
     data_cfg.eval.device = "cpu"
     data_cfg.eval.output_dir = str(tmp_path / "val")

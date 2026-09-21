@@ -223,8 +223,9 @@ class DINO(nn.Module):
             rows = q.sum(dim=1, keepdim=True).clone()
             q = q / self._all_reduce(rows).clamp_min(1e-12)
             q = q / n_proto
-            q = q / q.sum(dim=0, keepdim=True).clamp_min(1e-12)
-            q = q / batch
+            if batch:
+                q = q / q.sum(dim=0, keepdim=True).clamp_min(1e-12)
+                q = q / batch
         return (q * batch).t()
 
     def _koleo(self, x):
@@ -279,7 +280,6 @@ class DINO(nn.Module):
             and student_patches is not None
             and teacher_patches is not None
             and mask is not None
-            and mask.any()
         ):
             masked_student = student_patches.float()[mask]
             masked_teacher = teacher_patches.float().detach()[mask]
@@ -288,12 +288,12 @@ class DINO(nn.Module):
                 teacher_logits = self.ibot_teacher(masked_teacher)
                 ibot_center = self.get_buffer("ibot_center")
                 assigned = self._sinkhorn(teacher_logits - ibot_center)
-                ibot_center.copy_(
-                    ibot_center.lerp(teacher_logits.mean(0, keepdim=True), 1 - self.center_momentum)
-                )
-            loss = loss + self.ibot_weight * (
-                -(assigned * F.log_softmax(student_logits / self.student_temp, dim=-1)).sum(dim=1).mean()
-            )
+                if teacher_logits.shape[0]:
+                    ibot_center.copy_(
+                        ibot_center.lerp(teacher_logits.mean(0, keepdim=True), 1 - self.center_momentum)
+                    )
+            token_loss = -(assigned * F.log_softmax(student_logits / self.student_temp, dim=-1)).sum(dim=1)
+            loss = loss + self.ibot_weight * (token_loss.sum() / max(token_loss.numel(), 1))
         if (
             self.gram_weight > 0
             and student_patches is not None
