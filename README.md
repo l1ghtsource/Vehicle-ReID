@@ -324,7 +324,10 @@ another backbone.
 
 *Identity-disjoint 5-fold OOF on EVA02 (`runs/cv/eva02_k4`). Query-weighted means: mAP 0.855,
 mAP@10 0.844, Rank-1 0.849. Fold 4 is the strongest (0.875); fold 1 is the weakest (0.844).
-Checkpoint selection and Optuna still use full-gallery mAP; mAP@10 is the contest ranking metric.
+Checkpoint selection and Optuna still use full-gallery mAP; mAP@10 on `submission.csv` is the
+contest ranking metric. The checkpoint that maximizes full-gallery mAP is not necessarily the one
+that maximizes the first ten. This finished run was selected on full mAP. Future comparisons should
+select on mAP@10 and keep full mAP as a diagnostic.
 GroupKFold stays. Identity-bootstrap 95% CIs (2000 resamples): mAP [0.842, 0.867], mAP@10
 [0.829, 0.857], Rank-1 [0.830, 0.867]. Fold mAP std is 0.012. Optuna used these same folds, so
 this is not a locked post-selection test. OOF is fold extractors; serving `eva02.pt` is a
@@ -791,8 +794,9 @@ fire on similar paint; `n_inliers` is the stricter geometric check.*
 ![Match evidence vs cosine on the cosine top-10](notebooks/eva02/readme_figs/matching_verifier.jpg)
 
 *Every fold-0 query's cosine top-10, scored by EfficientLoFTR. Same-id pairs have more inliers on
-average (56 vs 33), but the clouds overlap. Replacing the embedding Rank-1 with inlier count
-**hurts** (Rank-1 0.838 → 0.479). Matching is a visualization / second opinion, not a ranker.
+average (59 vs 31), but the clouds overlap. Replacing the embedding Rank-1 with inlier count
+**hurts** (Rank-1 0.851 → 0.492; inlier rerank rescues 16 of 46 misses and breaks 127 of 263 hits).
+Matching is a visualization / second opinion, not a ranker.
 Notebook: `notebooks/eva02/matching.ipynb`.*
 
 ### Embedding robustness (post-hoc)
@@ -910,6 +914,17 @@ on the query camera stay in the ranking. That includes unmarked open-set queries
 closed test) and any query whose only gallery positive was junk. Those queries are scored only
 through `candidates.csv` (F1, TNR), where the correct output is a refusal (no row). Evaluation
 fails if no query has a valid positive.
+
+The saved val galleries already drop same-camera same-identity images before ranking, so the
+published mAP@10 0.844 never sees that junk (`n_same_cam_id=0`). Putting those images back from each
+fold's `oof.csv` (about 1.6 per query; 1403 of 1541 queries have at least one) and scoring the
+combined gallery two ways: filter-then-top-10, as in `modules/metrics.py`, stays at mAP@10 0.844 and
+Rank-1 0.849; write the raw top-10 and only then strip junk inside those ten, as `eval.py` plus
+`data/evaluate.py` do, falls to mAP@10 0.839 with Rank-1 unchanged. Junk sits in the raw top-10 of
+1398 queries. On 9 queries a positive is inside the filtered top-10 and missing from the truncated
+submission. Test CSVs do not carry `camera_id` or `vehicle_id`, so serving cannot backfill those
+ranks. This is a gap between the H7 clarification and the reference file format, measured by
+reinserting junk into OOF, not a proven loss on the hidden test.
 
 ### Contest inference profile
 
@@ -1038,6 +1053,9 @@ decisions; 310 open / 1231 closed queries):
 | cosine AND CatBoost | 0.811 | 0.821 | 0.787 | 0.964 |
 
 CatBoost wins this OOF and is the contest accept rule (`refusal=eva02_model`, P ≥ 0.5473).
+A head trained to predict "top-1 is correct" instead of "a positive exists", with the same nested
+contest threshold, does not beat it: 0.801 on outer open-set OOF features (F1 0.805, TNR 0.790), and
+0.773 when trained on full-gallery top-1 labels. Serving stays on the presence model.
 Identity-bootstrap 95% CIs: cosine contest **0.801 [0.779, 0.822]**,
 CatBoost **0.814 [0.793, 0.834]**, AND **0.811 [0.790, 0.831]**. The paired cosine−CatBoost delta is
 **−0.013 [−0.026, −0.001] and excludes 0**. `eva02_threshold` remains the cosine preset (max cosine ≥
@@ -1479,3 +1497,49 @@ pretrain.py     Hydra pretraining entrypoint on extra data
 train.py        Hydra training entrypoint
 eval.py         Serving `.pt` / Lightning checkpoint evaluation and retrieval entrypoint
 ```
+
+## Metric board
+
+One board for the runs that exist on disk. **Bold** is the submission
+(`current_best_tuned`, PK 16×4, `weights/finetuned/eva02.pt`, no TTA and no postproc).
+*Italic* is forbidden at serve and is here only as a comparison: query expansion (AQE, including
+gallery-only) and HDBSCAN identities built from the public test query and gallery. Everything else
+is a legal probe or an OOF experiment that is not the submitted checkpoint.
+
+`mAP` is full-gallery average precision. `mAP@10` is the contest ranking metric. Trained rows are
+query-weighted 5-fold OOF unless the split column says otherwise. Zero-shot is a different split
+(every `train.csv` identity, frozen backbone), so those scores are not a drop from the OOF table.
+Optuna trials 0 and 23 were written before `mAP@10` was stored. DBA and the combined TTA+AQE row
+have no saved `mAP@10`; the TTA+AQE mAP is the published rounded K=2 figure.
+
+| Run | Split | mAP | mAP@10 | Rank-1 | Status |
+| --- | --- | ---: | ---: | ---: | --- |
+| Zero-shot DINOv3 ConvNeXt Base | all `train.csv` | 0.168 | 0.141 | 0.162 | probe |
+| Zero-shot DINOv3 ConvNeXt Large | all `train.csv` | 0.182 | 0.152 | 0.167 | probe |
+| Zero-shot RADIO C-RADIOv4-SO400M | all `train.csv` | 0.148 | 0.123 | 0.147 | probe |
+| Zero-shot LLM2CLIP EVA02-L-14-336 | all `train.csv` | 0.301 | 0.268 | 0.313 | probe |
+| DINOv3 ConvNeXt-Base Optuna trial 0 | 5-fold OOF | 0.705 | — | 0.690 | search seed |
+| DINOv3 ConvNeXt-Base Optuna trial 23 | 5-fold OOF | 0.759 | — | 0.751 | search; recipe moved to EVA02 |
+| DINOv3 ConvNeXt-Base Optuna trial 72 | 5-fold OOF | 0.759 | 0.737 | 0.750 | search |
+| DINOv3 ConvNeXt-Base Optuna trial 74 | 5-fold OOF | 0.760 | 0.739 | 0.744 | search best; not transferred |
+| EVA02 trial 23, PK K=2 | 5-fold OOF | 0.847 | 0.834 | 0.842 | not submitted |
+| **EVA02 trial 23, PK K=4** | **5-fold OOF** | **0.855** | **0.844** | **0.849** | **serving** |
+| EVA02 trial 74 recipe | fold 0 only | 0.832 | 0.818 | 0.825 | not submitted |
+| EVA02 multilevel (blocks 12/18/24) | 5-fold OOF, K=2 | 0.838 | 0.826 | 0.832 | not submitted |
+| EVA02 multilevel late | 5-fold OOF, K=2 | 0.845 | 0.833 | 0.836 | not submitted |
+| *HDBSCAN mcs4 iter1 on the K=2 recipe* | *5-fold OOF, orig IDs* | *0.857* | *0.846* | *0.853* | *forbidden* |
+| *HDBSCAN mcs4 iter2 on the K=2 recipe* | *5-fold OOF, orig IDs* | *0.856* | *0.845* | *0.850* | *forbidden* |
+| TTA hflip on K=2 | 5-fold OOF | 0.859 | 0.847 | 0.854 | allowed, not submitted |
+| TTA hflip+rot4 on K=2 | 5-fold OOF | 0.860 | 0.848 | 0.853 | allowed, not submitted |
+| Gallery aggregation on K=2 | 5-fold OOF | 0.849 | 0.836 | 0.839 | allowed, not submitted |
+| GNN rerank on K=2 | 5-fold OOF | 0.852 | 0.842 | 0.829 | not submitted |
+| k-reciprocal rerank on K=2 | 5-fold OOF | 0.835 | 0.824 | 0.809 | not submitted |
+| DBA k=5 sim³ on K=2 | 5-fold mean | 0.860 | — | 0.836 | not submitted |
+| *AQE query+gallery k=5 on K=2* | *5-fold OOF* | *0.859* | *0.849* | *0.833* | *forbidden* |
+| *AQE gallery-only on K=2* | *5-fold OOF* | *0.854* | *0.843* | *0.832* | *forbidden* |
+| *TTA hflip+rot4 + AQE query+gallery on K=2* | *published mAP* | *0.862* | — | — | *forbidden* |
+| *AQE query+gallery on K=4* | *fold 0 only* | *0.864* | *0.852* | *0.845* | *forbidden* |
+
+EfficientLoFTR inlier rerank of the K=4 fold-0 cosine top-10 drops Rank-1 from 0.851 to 0.492. It
+is a visualization, not a ranker. Open-set contest score (`0.7 × F1 + 0.3 × TNR`) is a different
+metric: CatBoost on the K=4 packs is 0.814 and is what Docker writes into `candidates.csv`.
