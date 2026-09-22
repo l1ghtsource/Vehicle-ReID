@@ -5,14 +5,21 @@ import torch
 from refusal import (
     CONTEST_F1_WEIGHT,
     CONTEST_TNR_WEIGHT,
+    HOLD_SEEDS,
+    OPEN_SET_FRACTION,
     STAT_NAMES,
+    TEST_GALLERY_SIZE,
     RefusalTabM,
+    aspect_shift_mask,
     balanced_pack,
     balanced_pairs,
     batch_examples,
+    bootstrap_accept_ci,
+    bootstrap_decision_ci,
     candidate_frame,
     candidate_metrics,
     contest_score,
+    cosine_holdout_sweep,
     decision_metrics,
     example_vector,
     feature_names,
@@ -21,19 +28,32 @@ from refusal import (
     fit_tabm,
     gap12,
     has_match,
+    identity_n_cameras,
+    impostor_max,
     load_boosting,
+    lookalike_mask,
     mask_gallery,
     max_cosine,
+    multi_camera_mask,
+    open_set_pack,
+    open_set_sized_pack,
     open_set_split,
+    paired_accept_delta_ci,
+    paired_contest_delta_ci,
+    percentile_mask,
     predict_boosting,
     predict_tabm,
     rank_average,
     ranking_metrics,
     refusal_accept,
     save_boosting,
+    scored_pack,
     select_threshold,
     similarities,
+    slice_decision,
     stat_vector,
+    subsample_gallery,
+    summarize_sweep,
     sweep_thresholds,
     top_hit,
     vote_fraction,
@@ -115,6 +135,18 @@ def test_protocol_open_set_and_masks():
     assert packed_cos[0] > packed_cos[1]
     assert packed_hit.dtype == bool and not packed_hit[1]
     assert packed_hit[0] == top_hit(query[:1], gallery, qids[:1], gids)[0]
+    eval_x, eval_y, eval_cos, eval_hit, held_ids = open_set_pack(
+        query, gallery, qids, gids, k=4, with_embeddings=False, fraction=0.2, seed=0
+    )
+    assert len(eval_y) == len(qids)
+    assert 0 < float(eval_y.mean()) < 1
+    assert set(held_ids.tolist()).issubset(set(qids.tolist()))
+    assert eval_cos.shape == eval_y.shape == eval_hit.shape
+    scored_x, scored_y, scored_cos, scored_hit = scored_pack(
+        query, gallery, qids, gids, k=4, with_embeddings=False
+    )
+    assert scored_y.tolist() == [1, 1, 1] and scored_x.shape[0] == 3
+    assert scored_cos.shape == scored_hit.shape == scored_y.shape
     hit = top_hit(query, gallery, qids, gids)
     assert hit.shape == (3,) and hit.dtype == bool
     with pytest.raises(ValueError, match="query identities"):
@@ -223,6 +255,21 @@ def test_contest_objective_beats_max_f1_on_open_set_tradeoff():
     assert contest["tnr"] == pytest.approx(0.5)
     assert contest["contest"] == pytest.approx(0.7625)
     assert contest["threshold"] == pytest.approx(0.95)
+
+
+def test_contest_threshold_depends_on_prevalence():
+    closed = np.array([0.95, 0.93, 0.91, 0.89, 0.60])
+    open_scores = np.array([0.88, 0.86, 0.84, 0.50, 0.40])
+    y_balanced = np.array([1, 1, 1, 1, 1, 0, 0, 0, 0, 0])
+    scores_balanced = np.concatenate([closed, open_scores])
+    top_balanced = y_balanced.astype(bool)
+    y_open = np.array([1, 1, 1, 1, 0])
+    scores_open = np.array([0.95, 0.93, 0.91, 0.60, 0.88])
+    top_open = y_open.astype(bool)
+    balanced = select_threshold(y_balanced, scores_balanced, top_balanced, kind="contest")
+    realistic = select_threshold(y_open, scores_open, top_open, kind="contest")
+    assert balanced["threshold"] != realistic["threshold"]
+    assert OPEN_SET_FRACTION == 0.2
 
 
 def test_pooled_oof_uses_per_fold_inner_thresholds():
@@ -447,3 +494,92 @@ def test_refusal_accept_kinds(tmp_path):
         refusal_accept("model", query, gallery, model_threshold=0.5, model_path="None")
     with pytest.raises(ValueError, match="none, threshold, model, or ensemble"):
         refusal_accept("tabm", query, gallery)
+
+
+def test_robustness_holdout_gallery_bootstrap_and_slices():
+    query, gallery, qids, gids = toy_embeddings()
+    assert HOLD_SEEDS[0] == 0 and HOLD_SEEDS[-1] == 7 and len(HOLD_SEEDS) == 8
+    assert TEST_GALLERY_SIZE == 750
+    rows = cosine_holdout_sweep(query, gallery, qids, gids, seeds=(0, 1), frozen_threshold=0.1)
+    assert {row["seed"] for row in rows} == {0, 1}
+    assert all("frozen_contest" in row for row in rows)
+    plain = cosine_holdout_sweep(query, gallery, qids, gids, seeds=(0,))
+    assert "frozen_contest" not in plain[0]
+    summary = summarize_sweep(rows, ("fit_threshold", "fit_contest", "frozen_contest"))
+    assert summary["fit_threshold"]["min"] <= summary["fit_threshold"]["max"]
+    packed = open_set_sized_pack(query, gallery, qids, gids, n_keep=6, seed=0, with_embeddings=False)
+    sized_x, sized_y, sized_cos, sized_hit, held, keep = packed
+    assert len(sized_y) == len(qids)
+    assert int(keep.sum()) <= 6 and keep.any()
+    assert len(held) >= 1
+    mask = subsample_gallery(qids, gids, n_keep=5, seed=2, require_positive=False)
+    assert int(mask.sum()) == 5
+    none = subsample_gallery(qids, gids, n_keep=3, seed=3, require_positive=True)
+    assert none.any()
+    y = np.array([1, 1, 1, 0, 0, 0])
+    scores = np.array([0.9, 0.8, 0.1, 0.7, 0.05, 0.02])
+    top = np.array([1, 1, 1, 0, 0, 0])
+    ci = bootstrap_decision_ci(y, scores, 0.5, top, n_boot=20, seed=0)
+    assert ci["f1"]["lo"] <= ci["f1"]["point"] <= ci["f1"]["hi"]
+    accept = scores >= 0.5
+    acc_ci = bootstrap_accept_ci(y, accept, top, n_boot=20, seed=0)
+    assert acc_ci["contest"]["point"] == pytest.approx(ci["contest"]["point"])
+    same_mask = paired_accept_delta_ci(y, top, accept, accept, n_boot=20, seed=1)
+    assert same_mask["includes_zero"] and same_mask["point"] == 0.0
+    delta = paired_contest_delta_ci(y, top, scores, scores, 0.5, 0.5, n_boot=20, seed=1)
+    assert delta["includes_zero"] and delta["point"] == 0.0
+    other = scores.copy()
+    other[:3] = 0.0
+    shift = paired_contest_delta_ci(y, top, scores, other, 0.5, 0.5, n_boot=30, seed=2)
+    assert shift["point"] != 0.0
+    values = np.arange(10, dtype=np.float64)
+    low = percentile_mask(values, q=20, side="low")
+    high = percentile_mask(values, q=80, side="high")
+    assert low[0] and not low[-1]
+    assert high[-1] and not high[0]
+    counts = identity_n_cameras([1, 1, 2], [10, 11, 10])
+    assert counts[1] == 2 and counts[2] == 1
+    assert multi_camera_mask([1, 2], counts, min_cameras=2).tolist() == [True, False]
+    sim = similarities(query, gallery)
+    impostor = impostor_max(sim, qids, gids)
+    assert impostor.shape == qids.shape
+    look = lookalike_mask(sim, qids, gids, min_cosine=impostor.min() - 1)
+    assert look.all()
+    qw, qh = np.ones(3), np.ones(3)
+    gw, gh = np.ones(len(gids)), np.ones(len(gids))
+    qw[0] = 4
+    shift_mask = aspect_shift_mask(qw, qh, gw, gh, qids, gids, ratio=1.5)
+    assert shift_mask[0]
+    sliced = slice_decision(y, scores, 0.5, top, np.array([1, 1, 1, 1, 0, 0], dtype=bool), min_n=3)
+    assert sliced is not None and sliced["n"] == 4
+    assert slice_decision(y, scores, 0.5, top, np.zeros(6, dtype=bool), min_n=3) is None
+    with pytest.raises(ValueError, match="n_keep"):
+        subsample_gallery(qids, gids, n_keep=0)
+    with pytest.raises(ValueError, match="gallery is empty"):
+        subsample_gallery(qids, np.zeros(0, dtype=int), n_keep=1)
+    with pytest.raises(ValueError, match="n_boot"):
+        bootstrap_decision_ci(y, scores, 0.5, top, n_boot=0)
+    with pytest.raises(ValueError, match="alpha"):
+        bootstrap_decision_ci(y, scores, 0.5, top, n_boot=2, alpha=0)
+    with pytest.raises(ValueError, match="aligned"):
+        bootstrap_decision_ci(y[:2], scores, 0.5, top)
+    with pytest.raises(ValueError, match="aligned"):
+        bootstrap_accept_ci(y[:2], accept, top)
+    with pytest.raises(ValueError, match="n_boot"):
+        bootstrap_accept_ci(y, accept, top, n_boot=0)
+    with pytest.raises(ValueError, match="alpha"):
+        bootstrap_accept_ci(y, accept, top, alpha=1)
+    with pytest.raises(ValueError, match="aligned"):
+        paired_accept_delta_ci(y[:2], top, accept, accept)
+    with pytest.raises(ValueError, match="aligned"):
+        paired_contest_delta_ci(y[:2], top, scores, scores, 0.5, 0.5)
+    with pytest.raises(ValueError, match="nonempty"):
+        percentile_mask([])
+    with pytest.raises(ValueError, match="side"):
+        percentile_mask(values, side="mid")
+    with pytest.raises(ValueError, match="shape"):
+        impostor_max(sim[:, :3], qids, gids)
+    with pytest.raises(ValueError, match="mask must match"):
+        slice_decision(y, scores, 0.5, top, np.array([True]))
+    empty_aspect = aspect_shift_mask([1.0], [1.0], gw, gh, [99], gids, ratio=1.5)
+    assert empty_aspect.tolist() == [False]

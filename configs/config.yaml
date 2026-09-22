@@ -17,12 +17,17 @@ init_checkpoint: null
 data:
   root: data
   train_csv: ${data.root}/train.csv
+  # Identities in this file may be held out. Other train rows stay in train (fold=-1).
+  val_source_csv: ${data.root}/train.csv
   query_csv: ${data.root}/test_query.csv
   gallery_csv: ${data.root}/test_gallery.csv
   image_dir: ${data.root}/images
   folds_file: artifacts/folds.csv
   n_folds: 5
   fold: 0
+  # Train on every competition identity. Epochs come from data.cv_dir (mean CV stop) or train.epochs.
+  full_retrain: false
+  cv_dir: null
   group_column: vehicle_id
   context_pct: 10.0
   context_jitter_pct: 0.0
@@ -32,6 +37,8 @@ data:
   pin_memory: true
   persistent_workers: false
   prefetch_factor: 2
+  # pil is serving. jpeg is CPU torchvision. jpeg_cuda is rejected in DataLoader workers.
+  decode_backend: pil
   batch_size_eval: 64
   verify_files: true
   sampler:
@@ -97,6 +104,9 @@ eval:
   output_dir: ${output_dir}/evaluation
   top_k: 10
   save_distances: true
+  # Flash/mem-efficient SDPA and cuDNN benchmark. Off restores trainer.deterministic.
+  fast_kernels: true
+  cpu_threads: 0
   tta:
     enabled: false
     hflip: true

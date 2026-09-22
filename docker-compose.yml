@@ -18,4 +18,4 @@ services:
       - eval.split=test
       - eval.output_dir=/runs/submission
       - eval.top_k=10
-      - refusal=eva02_ensemble
+      - refusal=eva02_threshold

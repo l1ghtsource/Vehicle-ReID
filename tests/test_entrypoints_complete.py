@@ -126,6 +126,43 @@ def test_train_main_all_paths(cfg, tmp_path, monkeypatch):
         train.main.__wrapped__(cfg)
 
 
+def test_train_full_retrain_skips_val_monitor(cfg, tmp_path, monkeypatch):
+    monkeypatch.setattr(train, "ReIDDataModule", FakeDataModule)
+    monkeypatch.setattr(train, "ReIDModule", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(train, "ModelCheckpoint", FakeCheckpoint)
+    monkeypatch.setattr(train, "CSVLogger", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(train.L, "Trainer", FakeTrainer)
+    monkeypatch.setattr(train.L, "seed_everything", lambda *args, **kwargs: None)
+    cfg.output_dir = str(tmp_path / "full")
+    cfg.trainer.accelerator = "cpu"
+    cfg.trainer.devices = 1
+    cfg.trainer.strategy = "auto"
+    cfg.resume = None
+    cfg.init_checkpoint = None
+    cfg.data.full_retrain = True
+    cfg.data.cv_dir = None
+    cfg.train.epochs = 27
+    train.main.__wrapped__(cfg)
+    callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
+    assert FakeTrainer.instances[-1].kwargs["limit_val_batches"] == 0
+    assert FakeTrainer.instances[-1].kwargs["num_sanity_val_steps"] == 0
+    assert callback.kwargs["monitor"] is None
+    assert callback.kwargs["save_top_k"] == 0
+    assert cfg.train.epochs == 27
+
+    cv = tmp_path / "cv"
+    for fold, epoch in enumerate((25, 25, 24, 21, 12)):
+        directory = cv / f"fold{fold}" / "val"
+        directory.mkdir(parents=True)
+        (directory / "metrics.json").write_text(
+            json.dumps({"checkpoint": str(tmp_path / f"epoch{epoch:03d}.ckpt")})
+        )
+    cfg.data.cv_dir = str(cv)
+    train.main.__wrapped__(cfg)
+    assert cfg.train.epochs == 22
+    assert FakeTrainer.instances[-1].kwargs["max_epochs"] == 22
+
+
 class LoadedModel(nn.Module):
     def __init__(self, cfg, initialize_pretrained=False):
         super().__init__()
@@ -303,6 +340,52 @@ def test_eval_load_model_choices(cfg, tmp_path, monkeypatch):
     assert str(effective.refusal.model_path) == "/tmp/refuse.cbm"
 
 
+def test_overlay_eval_migrates_h7_junk_protocol(cfg):
+    saved = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    saved.data.validation.exclude_all_same_camera = True
+    migrated = eval_module.overlay_eval_config(saved, cfg, [])
+    assert bool(migrated.data.validation.exclude_all_same_camera) is False
+    sibling = eval_module.overlay_eval_config(saved, cfg, ["data.fold=1"])
+    assert bool(sibling.data.validation.exclude_all_same_camera) is False
+    cfg.data.validation.exclude_all_same_camera = True
+    kept = eval_module.overlay_eval_config(
+        saved,
+        cfg,
+        ["data.validation.exclude_all_same_camera=true"],
+    )
+    assert bool(kept.data.validation.exclude_all_same_camera) is True
+    grouped = eval_module.overlay_eval_config(
+        saved,
+        cfg,
+        ["data.validation={exclude_all_same_camera: true}"],
+    )
+    assert bool(grouped.data.validation.exclude_all_same_camera) is True
+    assert eval_module.protocol_overridden(
+        "data.validation.exclude_all_same_camera",
+        {"data.validation"},
+    )
+    assert not eval_module.protocol_overridden(
+        "data.validation.exclude_all_same_camera",
+        {"data.fold"},
+    )
+    stub = OmegaConf.create(
+        {
+            "checkpoint": "weights.pt",
+            "eval": {
+                "split": "val",
+                "device": "cpu",
+                "output_dir": "out",
+                "weights": "raw",
+                "top_k": 10,
+                "save_distances": False,
+                "precision": "fp32",
+            },
+        }
+    )
+    defaulted = eval_module.overlay_eval_config(saved, stub, [])
+    assert bool(defaulted.data.validation.exclude_all_same_camera) is False
+
+
 def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(eval_module, "ReIDModel", LoadedModel)
     path = tmp_path / "model.ckpt"
@@ -334,12 +417,67 @@ def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     assert overlay.eval.split == "val"
     assert overlay.eval.weights == "raw"
     assert str(overlay.refusal.kind) == str(cfg.refusal.kind)
+    kept = eval_module.overlay_eval_config(
+        OmegaConf.create(
+            {"model": {"backend": "llm2clip", "compile": True}, "data": {"root": str(tmp_path)}}
+        ),
+        stub,
+        [],
+    )
+    assert str(kept.model.backend) == "llm2clip"
+    assert bool(kept.model.compile) is True
+    matched = eval_module.overlay_eval_config(
+        OmegaConf.create({"model": {"backend": "llm2clip", "compile": False}}),
+        OmegaConf.merge(stub, {"model": {"backend": "llm2clip", "compile": True, "attn_kernel": "sdpa"}}),
+        [],
+    )
+    assert bool(matched.model.compile) is True
+    assert str(matched.model.attn_kernel) == "sdpa"
+    dynamic = eval_module.overlay_eval_config(
+        OmegaConf.create({"model": {"backend": "llm2clip", "compile_dynamic": True}}),
+        OmegaConf.merge(
+            stub,
+            {"model": {"backend": "llm2clip", "compile_dynamic": False, "compile_embedding": False}},
+        ),
+        [],
+    )
+    assert bool(dynamic.model.compile_dynamic) is False
+    assert bool(dynamic.model.compile_embedding) is False
+    old_saved = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    del old_saved.data["decode_backend"]
+    with pytest.raises(AttributeError):
+        _ = old_saved.data.decode_backend
+    filled = eval_module.overlay_eval_config(old_saved, cfg, [])
+    assert str(filled.data.decode_backend) == "pil"
+    kept_backend = OmegaConf.create(OmegaConf.to_container(old_saved, resolve=True))
+    kept_backend.data.decode_backend = "cv2"
+    runtime = OmegaConf.merge(cfg, {"data": {"decode_backend": "jpeg"}})
+    unchanged = eval_module.overlay_eval_config(kept_backend, runtime, [])
+    assert str(unchanged.data.decode_backend) == "cv2"
+    overridden = eval_module.overlay_eval_config(old_saved, runtime, ["data.decode_backend=jpeg"])
+    assert str(overridden.data.decode_backend) == "jpeg"
     with_refusal = OmegaConf.merge(stub, {"refusal": {"kind": "none"}})
     _, refusal_cfg, _, _ = eval_module.load_model(with_refusal, [])
     assert str(refusal_cfg.refusal.kind) == "none"
     with_stream = OmegaConf.merge(stub, {"postproc": {"streaming": False}})
     _, stream_cfg, _, _ = eval_module.load_model(with_stream, [])
     assert bool(stream_cfg.postproc.streaming) is False
+
+
+def test_load_compatible_state_ignores_mask_token():
+    class Masked(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.weight = nn.Parameter(torch.zeros(1))
+            self.mask_token = nn.Parameter(torch.zeros(1))
+
+    model = Masked()
+    eval_module.load_compatible_state(model, {"weight": torch.ones(1)})
+    assert torch.equal(model.weight, torch.ones(1))
+    with pytest.raises(ValueError, match="mismatch"):
+        eval_module.load_compatible_state(model, {"weight": torch.ones(1), "extra": torch.ones(1)})
+    assert eval_module.load_result_keys(SimpleNamespace()) == ([], [])
+    assert eval_module.load_result_keys((["a"], ["b"])) == (["a"], ["b"])
 
 
 def test_refusal_serving_presets():
@@ -352,13 +490,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7011)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.6638)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.6719)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.5540)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7011)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.6719)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.6638)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.5540)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 
@@ -368,8 +506,8 @@ class EvalModel(nn.Module):
         return image
 
 
-def fake_embeddings(model, loader, cfg, device):
-    size = len(loader.dataset)
+def fake_embeddings(model, cfg, device, frame):
+    size = len(frame)
     values = np.arange(size * 8, dtype=np.float32).reshape(size, 8) + 1
     return values / np.linalg.norm(values, axis=1, keepdims=True)
 
@@ -388,7 +526,7 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
         "load_model",
         lambda cfg: (EvalModel(), cfg, checkpoint, "raw"),
     )
-    monkeypatch.setattr(eval_module, "embed_loader", fake_embeddings)
+    monkeypatch.setattr(eval_module, "embed_frame", fake_embeddings)
     monkeypatch.setattr(eval_module.L, "seed_everything", lambda *args, **kwargs: None)
     data_cfg.eval.device = "cpu"
     data_cfg.eval.output_dir = str(tmp_path / "val")
@@ -415,12 +553,13 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     data_cfg.eval.output_dir = str(tmp_path / "val_refuse")
     eval_module.main.__wrapped__(data_cfg)
     refused = pd.read_csv(tmp_path / "val_refuse/candidates.csv")
-    kept = pd.read_csv(tmp_path / "val_refuse/submission.csv")
+    kept = pd.read_csv(tmp_path / "val_refuse/submission.csv", header=None)
     refuse_meta = json.loads((tmp_path / "val_refuse/metrics.json").read_text())
     assert refused.empty
     assert len(kept) == refuse_meta["n_query"]
-    assert "confidence" not in kept.columns
-    assert list(kept.columns)[:1] == ["query_id"]
+    assert kept.shape[1] == 1 + int(data_cfg.eval.top_k)
+    first = (tmp_path / "val_refuse/submission.csv").read_text().splitlines()[0]
+    assert not first.startswith("query_id")
     assert refuse_meta["refusal"]["kind"] == "threshold"
     assert refuse_meta["refusal"]["n_refuse"] == refuse_meta["n_query"]
     data_cfg.refusal.kind = "model"
@@ -441,6 +580,7 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     data_cfg.eval.save_distances = False
     eval_module.main.__wrapped__(data_cfg)
     assert (tmp_path / "test/submission.csv").is_file()
+    assert not (tmp_path / "test/submission.csv").read_text().splitlines()[0].startswith("query_id")
     cand = pd.read_csv(tmp_path / "test/candidates.csv")
     assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
     assert not cand.empty
@@ -530,6 +670,7 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
         raise TypeError("Expected mapping tta config")
     data["root"] = old_root
     data["train_csv"] = f"{old_root}/train.csv"
+    data["val_source_csv"] = f"{old_root}/train.csv"
     data["query_csv"] = f"{old_root}/test_query.csv"
     data["gallery_csv"] = f"{old_root}/test_gallery.csv"
     data["image_dir"] = f"{old_root}/images"
@@ -577,8 +718,10 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
     assert str(written.data.gallery_csv) == str(Path(data_cfg.data.root) / "test_gallery.csv")
     assert str(written.data.image_dir) == str(Path(data_cfg.data.root) / "images")
     assert str(written.data.train_csv) == str(Path(data_cfg.data.root) / "train.csv")
+    assert str(written.data.val_source_csv) == str(Path(data_cfg.data.root) / "train.csv")
     assert not str(written.data.query_csv).startswith(old_root)
     assert (out / "submission.csv").is_file()
+    assert not (out / "submission.csv").read_text().splitlines()[0].startswith("query_id")
     cand = pd.read_csv(out / "candidates.csv")
     assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
 

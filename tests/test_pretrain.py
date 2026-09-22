@@ -17,10 +17,15 @@ import train
 from dataset.folds import fingerprint
 from dataset.pretrain import (
     READERS,
+    SSL_CROP,
+    SSL_FULL,
+    SSL_SOURCE,
     PretrainDataModule,
     load_external_data,
+    read_test_train_ssl,
     read_veri,
     read_vric,
+    ssl_image_mode,
 )
 
 
@@ -93,6 +98,14 @@ def test_current_best_tuned_matches_eva02_oof():
                 "pretrain.datasets=[vric]",
             ],
         )
+        ssl = compose(
+            config_name="pretrain",
+            overrides=[
+                "experiment=current_best_tuned",
+                "pretrain.datasets=[test_train_ssl]",
+            ],
+        )
+    pretrain_module.apply_ssl_pretrain(ssl)
     assert cfg.model.name == "microsoft/LLM2CLIP-EVA02-L-14-336"
     assert cfg.train.epochs == 27
     assert cfg.train.accumulate_grad_batches == 4
@@ -113,6 +126,14 @@ def test_current_best_tuned_matches_eva02_oof():
     assert list(swapped.data.image_size) == [336, 336]
     assert swapped.model.head.local_parts == 0
     assert list(swapped.pretrain.datasets) == ["vric"]
+    assert list(ssl.pretrain.datasets) == ["test_train_ssl"]
+    assert ssl.loss.terms[0].name == "dino"
+    assert float(ssl.loss.terms[0].params.ibot_weight) == 1.0
+    assert ssl.data.sampler.kind == "random"
+    assert ssl_image_mode("test_train_ssl") == "crop"
+    assert ssl_image_mode("test_train_ssl_crop") == "crop"
+    assert ssl_image_mode("test_train_ssl_full") == "full"
+    assert ssl_image_mode("vric") is None
 
 
 def test_read_veri_and_vric_formats(tmp_path):
@@ -181,6 +202,132 @@ def test_load_external_data_mix_and_guards(data_cfg, tmp_path, monkeypatch):
     )
     with pytest.raises(ValueError, match="unique"):
         load_external_data(cfg)
+
+
+def test_test_train_ssl_reader_and_guards(data_cfg, tmp_path, monkeypatch):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    cfg.pretrain.datasets = [SSL_SOURCE]
+    frame = read_test_train_ssl(cfg)
+    assert set(frame.source) == {SSL_CROP}
+    assert frame.full_image.eq(False).all()
+    mixed = load_external_data(cfg)
+    assert mixed.image_id.is_unique
+    assert mixed.vehicle_id.nunique() == len(mixed)
+
+    full = read_test_train_ssl(cfg, "full")
+    assert set(full.source) == {SSL_FULL}
+    assert full.full_image.all()
+    cfg.pretrain.datasets = [SSL_FULL]
+    assert load_external_data(cfg).full_image.all()
+    with pytest.raises(ValueError, match="crop or full"):
+        read_test_train_ssl(cfg, "both")
+
+    cfg.pretrain.datasets = ["veri", SSL_SOURCE]
+    with pytest.raises(ValueError, match="cannot mix"):
+        load_external_data(cfg)
+    cfg.pretrain.datasets = [SSL_CROP, SSL_FULL]
+    with pytest.raises(ValueError, match="cannot mix"):
+        load_external_data(cfg)
+
+    query = pd.read_csv(cfg.data.query_csv)
+    query.loc[0, "image_id"] = pd.read_csv(cfg.data.train_csv).image_id.iloc[0]
+    query.to_csv(cfg.data.query_csv, index=False)
+    with pytest.raises(ValueError, match="unique"):
+        read_test_train_ssl(cfg)
+    deduped = read_test_train_ssl(cfg, "full")
+    assert deduped.image_id.is_unique
+
+    empty_frame = pd.DataFrame(
+        {
+            "image_id": pd.Series(dtype=str),
+            "x": pd.Series(dtype=float),
+            "y": pd.Series(dtype=float),
+            "w": pd.Series(dtype=float),
+            "h": pd.Series(dtype=float),
+            "camera_id": pd.Series(dtype=int),
+            "vehicle_id": pd.Series(dtype=int),
+            "row_id": pd.Series(dtype=int),
+        }
+    )
+    monkeypatch.setattr("dataset.pretrain.read_annotations", lambda *args, **kwargs: empty_frame)
+    with pytest.raises(ValueError, match="empty"):
+        read_test_train_ssl(cfg)
+
+
+def test_ssl_pretrain_datamodule_two_views(data_cfg, tmp_path):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    cfg.pretrain.datasets = [SSL_SOURCE]
+    cfg.data.sampler.kind = "random"
+    dm = PretrainDataModule(cfg)
+    dm.prepare_data()
+    dm.setup("fit")
+    item = dm.train_set[0]
+    assert "view" in item
+    assert item["view"].shape == item["image"].shape
+    dm.trainer = cast(L.Trainer, SimpleNamespace(global_rank=0, world_size=1))
+    batch = next(iter(dm.train_dataloader()))
+    assert "view" in batch
+    assert batch["image"].ndim == 4
+    cfg.pretrain.datasets = [SSL_FULL]
+    full_dm = PretrainDataModule(cfg)
+    full_dm.setup("fit")
+    assert full_dm.train_frame.full_image.all()
+
+
+def test_apply_ssl_pretrain_guards(data_cfg, tmp_path):
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    assert cfg.data.sampler.kind == "pk"
+    pretrain_module.apply_ssl_pretrain(cfg)
+    assert cfg.data.sampler.kind == "pk"
+    cfg.pretrain.datasets = [SSL_SOURCE, "veri"]
+    with pytest.raises(ValueError, match="cannot mix"):
+        pretrain_module.apply_ssl_pretrain(cfg)
+    cfg.pretrain.datasets = [SSL_CROP, SSL_FULL]
+    with pytest.raises(ValueError, match="cannot mix"):
+        pretrain_module.apply_ssl_pretrain(cfg)
+    cfg.pretrain.datasets = [SSL_SOURCE]
+    cfg.train.ema.enabled = False
+    with pytest.raises(ValueError, match="ema"):
+        pretrain_module.apply_ssl_pretrain(cfg)
+    with open_dict(cfg):
+        cfg.train.ema.enabled = True
+        cfg.data.sampler.kind = "pk"
+    pretrain_module.apply_ssl_pretrain(cfg)
+    assert cfg.data.sampler.kind == "random"
+    assert [str(term.name) for term in cfg.loss.terms] == ["dino"]
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 0.0
+    cfg.pretrain.datasets = [SSL_FULL]
+    pretrain_module.apply_ssl_pretrain(cfg)
+    assert [str(term.name) for term in cfg.loss.terms] == ["dino"]
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 0.0
+    with open_dict(cfg):
+        cfg.model.backend = "llm2clip"
+        cfg.data.sampler.kind = "pk"
+    pretrain_module.apply_ssl_pretrain(cfg)
+    assert float(cfg.loss.terms[0].params.ibot_weight) == 1.0
+
+
+def test_pretrain_main_applies_ssl(data_cfg, tmp_path, monkeypatch):
+    cfg = attach_pretrain(data_cfg, tmp_path, datasets=(SSL_SOURCE,))
+    cfg.output_dir = str(tmp_path / "ssl-run")
+    cfg.trainer.accelerator = "cpu"
+    cfg.trainer.devices = 1
+    cfg.resume = None
+    cfg.train.ema.enabled = True
+    cfg.data.sampler.kind = "pk"
+    monkeypatch.setattr(pretrain_module, "PretrainDataModule", FakePretrainDataModule)
+    monkeypatch.setattr(pretrain_module, "ReIDModule", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(pretrain_module, "ModelCheckpoint", FakeCheckpoint)
+    monkeypatch.setattr(pretrain_module, "CSVLogger", lambda *args, **kwargs: SimpleNamespace())
+    monkeypatch.setattr(pretrain_module.L, "Trainer", FakeTrainer)
+    monkeypatch.setattr(pretrain_module.L, "seed_everything", lambda *args, **kwargs: None)
+    FakeTrainer.instances.clear()
+    FakeTrainer.global_zero = True
+    pretrain_module.main.__wrapped__(cfg)
+    assert [str(term.name) for term in cfg.loss.terms] == ["dino"]
+    assert cfg.data.sampler.kind == "random"
+    summary = json.loads((tmp_path / "ssl-run/run_summary.json").read_text())
+    assert summary["datasets"] == [SSL_SOURCE]
 
 
 def test_pretrain_datamodule_uses_full_competition_train(data_cfg, tmp_path):
@@ -370,6 +517,34 @@ def test_load_initial_weights_choices_and_mismatches(tmp_path):
         path,
     )
     assert train.load_initial_weights(LossesOnly(), path) == "raw"
+
+    torch.save(
+        {
+            "format": train.SERVING_FORMAT,
+            "state_dict": dict(module.model.state_dict()),
+            "weights": "ema",
+        },
+        path,
+    )
+    assert train.load_initial_weights(module, path) == "ema"
+    torch.save({"format": train.SERVING_FORMAT, "state_dict": {}}, path)
+    with pytest.raises(ValueError, match="missing state_dict"):
+        train.load_initial_weights(module, path)
+
+    class Masked(InitModule):
+        def __init__(self):
+            super().__init__()
+            self.model.mask_token = nn.Parameter(torch.zeros(1, 1))
+
+    torch.save(
+        {
+            "format": train.SERVING_FORMAT,
+            "state_dict": dict(module.model.state_dict()),
+            "weights": "raw",
+        },
+        path,
+    )
+    assert train.load_initial_weights(Masked(), path) == "raw"
 
 
 def test_train_main_init_checkpoint(cfg, tmp_path, monkeypatch):

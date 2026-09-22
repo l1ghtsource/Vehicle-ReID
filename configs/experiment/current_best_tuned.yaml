@@ -1,6 +1,8 @@
 # @package _global_
-# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe
-# (5-fold OOF mAP 0.847, mAP@10 0.834; junk = same vehicle and camera).
+# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe on original
+# labeled train only. Identity-disjoint 5-fold OOF mAP 0.847, mAP@10 0.834, Rank-1 0.842.
+# HDBSCAN test pseudo-labels were tried (runs/cv/pseudo_iter001_mcs4) and are not used.
+# Junk = same vehicle and camera.
 # Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
 defaults:
   - override /model: llm2clip

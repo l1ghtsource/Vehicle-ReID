@@ -2,8 +2,10 @@ import numpy as np
 
 from .features import example_vector, similarities
 
+OPEN_SET_FRACTION = 0.2
 
-def open_set_split(qids, gids, fraction=0.2, seed=0):
+
+def open_set_split(qids, gids, fraction=OPEN_SET_FRACTION, seed=0):
     qids = np.asarray(qids)
     gids = np.asarray(gids)
     if not 0 < fraction < 1:
@@ -51,7 +53,7 @@ def mask_gallery(gallery, keep):
     return gallery[keep]
 
 
-def balanced_pack(query, gallery, qids, gids, k=10, with_embeddings=True, edge=0.5):
+def _pair_inputs(query, gallery, qids, gids):
     query = np.asarray(query, dtype=np.float32)
     if query.ndim == 1:
         query = query[None]
@@ -62,6 +64,11 @@ def balanced_pack(query, gallery, qids, gids, k=10, with_embeddings=True, edge=0
         raise ValueError("query rows must match identities")
     if len(gallery) != len(gids):
         raise ValueError("gallery rows must match identities")
+    return query, gallery, qids, gids
+
+
+def scored_pack(query, gallery, qids, gids, k=10, with_embeddings=True, edge=0.5):
+    query, gallery, qids, gids = _pair_inputs(query, gallery, qids, gids)
     rows, labels, cosine, hits = [], [], [], []
     for item, qid in zip(query, qids, strict=True):
         present = bool(np.any(gids == qid))
@@ -69,12 +76,39 @@ def balanced_pack(query, gallery, qids, gids, k=10, with_embeddings=True, edge=0
         labels.append(int(present))
         cosine.append(float(similarities(item[None], gallery).max()))
         hits.append(bool(present and top_hit(item[None], gallery, np.array([qid]), gids)[0]))
+    return (
+        np.stack(rows),
+        np.asarray(labels, dtype=int),
+        np.asarray(cosine, dtype=np.float64),
+        np.asarray(hits, dtype=bool),
+    )
+
+
+def balanced_pack(query, gallery, qids, gids, k=10, with_embeddings=True, edge=0.5):
+    query, gallery, qids, gids = _pair_inputs(query, gallery, qids, gids)
+    rows, labels, cosine, hits = [], [], [], []
+    for item, qid in zip(query, qids, strict=True):
+        features, y, score, hit = scored_pack(
+            item, gallery, np.array([qid]), gids, k=k, with_embeddings=with_embeddings, edge=edge
+        )
+        rows.append(features[0])
+        labels.append(int(y[0]))
+        cosine.append(float(score[0]))
+        hits.append(bool(hit[0]))
         keep = gids != qid
-        if present and keep.any():
-            stripped = gallery[keep]
-            rows.append(example_vector(item, stripped, k=k, with_embeddings=with_embeddings, edge=edge))
+        if y[0] == 1 and keep.any():
+            stripped = scored_pack(
+                item,
+                gallery[keep],
+                np.array([qid]),
+                gids[keep],
+                k=k,
+                with_embeddings=with_embeddings,
+                edge=edge,
+            )
+            rows.append(stripped[0][0])
             labels.append(0)
-            cosine.append(float(similarities(item[None], stripped).max()))
+            cosine.append(float(stripped[2][0]))
             hits.append(False)
     return (
         np.stack(rows),
@@ -89,3 +123,28 @@ def balanced_pairs(query, gallery, qids, gids, k=10, with_embeddings=True, edge=
         query, gallery, qids, gids, k=k, with_embeddings=with_embeddings, edge=edge
     )
     return features, labels
+
+
+def open_set_pack(
+    query,
+    gallery,
+    qids,
+    gids,
+    k=10,
+    with_embeddings=True,
+    edge=0.5,
+    fraction=OPEN_SET_FRACTION,
+    seed=0,
+):
+    query, gallery, qids, gids = _pair_inputs(query, gallery, qids, gids)
+    _, gallery_keep, held = open_set_split(qids, gids, fraction=fraction, seed=seed)
+    packed = scored_pack(
+        query,
+        gallery[gallery_keep],
+        qids,
+        gids[gallery_keep],
+        k=k,
+        with_embeddings=with_embeddings,
+        edge=edge,
+    )
+    return (*packed, np.asarray(held))

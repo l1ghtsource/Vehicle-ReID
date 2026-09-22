@@ -5,6 +5,7 @@ from contextlib import nullcontext
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -47,7 +48,24 @@ def test_pretrain_script_selects_model_data_and_recipe():
     assert "CUDA_VISIBLE_DEVICES" in script
     assert "data.image_size=[336,336]" in script
     assert "model.head.local_parts=0" in script
+    assert "test_train_ssl" in script
+    assert "test_train_ssl_crop" in script
+    assert "test_train_ssl_full" in script
+    assert '"loss=dino"' in script
     assert '"$@"' in script.split('"$PYTHON" pretrain.py', 1)[1]
+
+
+def test_pseudo_label_script_selects_gpu_and_serving_checkpoint():
+    script = (Path(__file__).resolve().parents[1] / "scripts/pseudo_label.sh").read_text()
+    assert "device must be cuda:N or N" in script
+    assert "CUDA_VISIBLE_DEVICES" in script
+    assert "weights/finetuned/eva02.pt" in script
+    assert "scripts/pseudo_label.py" in script
+    assert "ITER=" in script
+    assert "MIN_CLUSTER_SIZE=" in script
+    assert "MIN_SAMPLES=" in script
+    assert "--min-samples" in script
+    assert '"$@"' in script.split('"$PYTHON" scripts/pseudo_label.py', 1)[1]
 
 
 def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
@@ -78,8 +96,30 @@ def test_aggregate_cv_main_and_guard(tmp_path, monkeypatch):
     assert report["metrics"]["mAP"]["query_weighted_mean"] == 0.875
 
     monkeypatch.setattr(sys, "argv", ["aggregate_cv", str(first), str(first)])
-    with pytest.raises(ValueError, match="Duplicate"):
+    with pytest.raises(ValueError, match="Duplicate folds"):
         aggregate_cv.main()
+
+    with pytest.raises(ValueError, match="Cannot read stop epoch"):
+        aggregate_cv.checkpoint_epoch(tmp_path / "last.ckpt")
+    with pytest.raises(ValueError, match="n_folds"):
+        aggregate_cv.mean_stop_epochs(tmp_path, n_folds=0)
+    cv = tmp_path / "cv"
+    for fold, epoch in enumerate((25, 25, 24, 21, 12)):
+        directory = cv / f"fold{fold}" / "val"
+        directory.mkdir(parents=True)
+        (directory / "metrics.json").write_text(
+            json.dumps({"checkpoint": f"/ckpt/fold{fold}/epoch{epoch:03d}.ckpt"})
+        )
+    assert aggregate_cv.mean_stop_epochs(cv) == 22
+    assert aggregate_cv.checkpoint_epoch(Path("epoch000.ckpt")) == 0
+    assert aggregate_cv.completed_epochs(Path("epoch000.ckpt")) == 1
+    assert aggregate_cv.completed_epochs(Path("epoch025.ckpt")) == 26
+    zeros = tmp_path / "zeros"
+    for fold in range(5):
+        directory = zeros / f"fold{fold}" / "val"
+        directory.mkdir(parents=True)
+        (directory / "metrics.json").write_text(json.dumps({"checkpoint": f"/ckpt/fold{fold}/epoch000.ckpt"}))
+    assert aggregate_cv.mean_stop_epochs(zeros) == 1
 
     monkeypatch.setattr(
         sys,
@@ -124,14 +164,14 @@ def test_download_weights_all_models(tmp_path, monkeypatch):
         lambda *args, **kwargs: files.append((args, kwargs)) or "file",
     )
     monkeypatch.setattr(download_weights, "verify_digests", lambda *args, **kwargs: None)
-    for name in ("dinov3_base", "dinov3_large", "radio", "llm2clip"):
+    for name in ("dinov3_base", "dinov3_large", "radio", "llm2clip", "efficientloftr"):
         monkeypatch.setattr(
             sys,
             "argv",
             ["download_weights", name, "--directory", str(tmp_path)],
         )
         download_weights.main()
-    assert len(snapshots) == 2
+    assert len(snapshots) == 3
     assert len(files) == 2
     assert "revision" not in snapshots[0][1]
     radio = download_weights.MODELS["radio"]
@@ -205,15 +245,15 @@ class ProbeModel(nn.Module):
         self.weight = nn.Parameter(torch.ones(1))
 
 
-def fake_zero_shot_embeddings(model, loader, cfg, device):
-    size = len(loader.dataset)
+def fake_zero_shot_embeddings(model, cfg, device, frame):
+    size = len(frame)
     values = np.arange(size * 8, dtype=np.float32).reshape(size, 8) + 1
     return values / np.linalg.norm(values, axis=1, keepdims=True)
 
 
 def test_zero_shot_main(data_cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(zero_shot, "ReIDModel", ProbeModel)
-    monkeypatch.setattr(zero_shot, "embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr(zero_shot, "embed_frame", fake_zero_shot_embeddings)
     monkeypatch.setattr(zero_shot.L, "seed_everything", lambda *args, **kwargs: None)
     out = tmp_path / "probe"
     monkeypatch.setattr(
@@ -270,7 +310,7 @@ def test_zero_shot_main(data_cfg, tmp_path, monkeypatch):
     torch.use_deterministic_algorithms(False)
 
     monkeypatch.setattr(models, "ReIDModel", ProbeModel)
-    monkeypatch.setattr("modules.inference.embed_loader", fake_zero_shot_embeddings)
+    monkeypatch.setattr("modules.inference.embed_frame", fake_zero_shot_embeddings)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -328,14 +368,22 @@ def test_export_serving_payload(tmp_path, monkeypatch):
         export_serving.export_serving(written, tmp_path / "again.pt", "ema")
     with pytest.raises(FileNotFoundError):
         export_serving.source_checkpoint(tmp_path / "missing.ckpt")
+    monkeypatch.setattr(export_serving, "DEFAULT_SUMMARY", tmp_path / "missing-summary.json")
     monkeypatch.setattr(export_serving, "DEFAULT_METRICS", tmp_path / "missing.json")
     with pytest.raises(ValueError, match="Pass --checkpoint"):
         export_serving.source_checkpoint(None)
+    with pytest.raises(ValueError, match="No checkpoint path"):
+        export_serving.listed_checkpoint({})
     metrics = tmp_path / "metrics.json"
     metrics.write_text(json.dumps({"checkpoint": str(tmp_path / "absent.ckpt")}))
     monkeypatch.setattr(export_serving, "DEFAULT_METRICS", metrics)
     with pytest.raises(FileNotFoundError):
         export_serving.source_checkpoint(None)
+    summary = tmp_path / "run_summary.json"
+    summary.write_text(json.dumps({"last_checkpoint": str(source), "best_checkpoint": None}))
+    monkeypatch.setattr(export_serving, "DEFAULT_SUMMARY", summary)
+    assert export_serving.source_checkpoint(None) == source
+    monkeypatch.setattr(export_serving, "DEFAULT_SUMMARY", tmp_path / "missing-summary.json")
     metrics.write_text(json.dumps({"checkpoint": str(source)}))
     assert export_serving.source_checkpoint(None) == source
     monkeypatch.setattr(
@@ -384,8 +432,8 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     target = tmp_path / "heads" / "eva02_catboost.cbm"
     written = export_refusal.export_refusal(cv, target, seed=0, n_folds=2, k=2)
     assert written.is_file()
-    features, labels = export_refusal.collect_features(cv, n_folds=2, k=2)
-    assert features.shape[0] == len(labels) == 8
+    features, labels, hits = export_refusal.collect_features(cv, n_folds=2, k=2)
+    assert features.shape[0] == len(labels) == len(hits) == 8
     with pytest.raises(ValueError, match="n_folds"):
         export_refusal.collect_features(cv, n_folds=0)
     with pytest.raises(FileNotFoundError):
@@ -395,6 +443,160 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     (packed / "query.csv").write_text("image_id,vehicle_id\nmissing,1\n0c,2\n")
     with pytest.raises(ValueError, match="missing image_id"):
         export_refusal.load_pack(packed)
+    query, gallery = export_refusal.read_split(cv / "fold0" / "val")
+
+    def fake_embed(fold, frame):
+        n = len(frame)
+        emb = np.eye(n, 8, dtype=np.float32)
+        if n >= 4:
+            emb[1] = emb[0] + 0.05
+            emb[3] = emb[2] + 0.05
+        return emb
+
+    with pytest.raises(ValueError, match="query/gallery rows"):
+        export_refusal.pack_from_embeddings(query, gallery, np.zeros((1, 8)))
+    retrained = tmp_path / "heads" / "full.cbm"
+    yaml_path = tmp_path / "refuse.yaml"
+    yaml_path.write_text("kind: model\nmodel_threshold: 0.1234\n")
+    written = export_refusal.export_refusal(
+        cv,
+        retrained,
+        seed=0,
+        n_folds=2,
+        k=2,
+        embed_fold=fake_embed,
+    )
+    assert written.is_file()
+    assert not retrained.with_name("full.threshold.json").is_file()
+    bad_yaml = tmp_path / "bad.yaml"
+    bad_yaml.write_text("kind: model\n")
+    with pytest.raises(ValueError, match="model_threshold"):
+        export_refusal.update_refusal_config(bad_yaml, 0.5)
+    converted = export_refusal.jsonable(
+        {"a": np.float64(1.5), "b": np.int64(2), "c": np.bool_(True), "d": "x"}
+    )
+    assert converted == {"a": 1.5, "b": 2, "c": 1, "d": "x"}
+
+    class _Model:
+        def to(self, device):
+            return self
+
+        def eval(self):
+            return self
+
+    class _Cfg:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+    monkeypatch.setattr(export_refusal, "initialize_config_dir", lambda **kwargs: _Cfg())
+    monkeypatch.setattr(export_refusal, "compose", lambda **kwargs: object())
+    monkeypatch.setattr(export_refusal, "load_model", lambda cfg: (_Model(), cfg, {}, "ema"))
+    model, cfg, choice = export_refusal.load_embedder(tmp_path / "x.pt", "cpu")
+    assert choice == "ema"
+    monkeypatch.setattr(
+        export_refusal,
+        "embed_frame",
+        lambda model, cfg, device, frame: np.ones((len(frame), 4), dtype=np.float32),
+    )
+    stacked = export_refusal.embed_split(model, cfg, "cpu", pd.DataFrame({"image_id": ["a", "b"]}))
+    assert stacked.shape == (2, 4)
+
+    def fake_split(model, cfg, device, frame):
+        return np.ones((len(frame), 4))
+
+    monkeypatch.setattr(export_refusal, "embed_split", fake_split)
+    bound = export_refusal.bind_checkpoint_embedder(tmp_path / "x.pt", "cpu")
+    assert bound(0, pd.DataFrame({"image_id": ["a"]})).shape == (1, 4)
+    monkeypatch.setattr(export_refusal, "source_checkpoint", lambda path: tmp_path / "served.pt")
+    (tmp_path / "served.pt").write_bytes(b"x")
+    monkeypatch.setattr(export_refusal, "bind_checkpoint_embedder", lambda *args, **kwargs: fake_embed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "cli-full.cbm"),
+            "--n-folds",
+            "1",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+        ],
+    )
+    export_refusal.main()
+    assert (tmp_path / "cli-full.cbm").is_file()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "leaky.cbm"),
+            "--n-folds",
+            "1",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+            "--update-config",
+        ],
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        export_refusal.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "nested-leaky.cbm"),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+            "--update-config",
+        ],
+    )
+    with pytest.raises(ValueError, match="cannot be combined"):
+        export_refusal.main()
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--cv",
+            str(cv),
+            "--output",
+            str(tmp_path / "nope.cbm"),
+            "--update-config",
+            str(yaml_path),
+        ],
+    )
+    with pytest.raises(ValueError, match="requires --nested"):
+        export_refusal.main()
     monkeypatch.setattr(
         sys,
         "argv",
@@ -431,3 +633,135 @@ def test_export_refusal_head(tmp_path, monkeypatch):
     )
     runpy.run_module("scripts.export_refusal", run_name="__main__")
     assert (tmp_path / "main.cbm").is_file()
+
+
+def test_export_refusal_nested(tmp_path, monkeypatch):
+    cv = tmp_path / "cv"
+    for fold in range(3):
+        _write_refusal_fold(cv, fold)
+    packs = export_refusal.collect_packs(cv, n_folds=3, k=2)
+    with pytest.raises(ValueError, match="at least 3 folds"):
+        export_refusal.nested_cosine(packs[:2])
+    with pytest.raises(ValueError, match="at least 3 folds"):
+        export_refusal.nested_catboost(packs[:2])
+
+    def fake_embed(fold, frame):
+        n = len(frame)
+        emb = np.eye(n, 8, dtype=np.float32)
+        if n >= 4:
+            emb[1] = emb[0] + 0.05
+            emb[3] = emb[2] + 0.05
+        return emb
+
+    report = export_refusal.nested_operating_points(cv, n_folds=3, k=2, seed=0, embed_fold=fake_embed)
+    assert "cosine_threshold" in report["serving"]
+    assert "model_threshold" in report["serving"]
+    assert report["protocol"]["eval"] == "open_set_identities"
+    assert report["cosine"]["outer"]["n"] == 6
+    assert report["catboost"]["outer"]["n"] == 6
+    assert report["serving"]["outer"]["n"] == 6
+    assert "_parts" not in report["cosine"]
+    assert len(report["cosine"]["fold_thresholds"]) == 3
+    cosine_accept = export_refusal.nested_cosine(packs)
+    catboost_accept = export_refusal.nested_catboost(packs, seed=0)
+    serving = export_refusal.nested_serving(cosine_accept, catboost_accept)
+    cosine_mask = np.concatenate(cosine_accept["_parts"]["accept"])
+    model_mask = np.concatenate(catboost_accept["_parts"]["accept"])
+    serving_parts = zip(
+        cosine_accept["_parts"]["accept"],
+        catboost_accept["_parts"]["accept"],
+        strict=True,
+    )
+    serving_mask = np.concatenate([left & right for left, right in serving_parts])
+    assert serving["outer"]["n"] == 6
+    assert int(serving_mask.sum()) <= int(cosine_mask.sum())
+    assert int(serving_mask.sum()) <= int(model_mask.sum())
+    cosine_yaml = tmp_path / "cosine.yaml"
+    model_yaml = tmp_path / "model.yaml"
+    both_yaml = tmp_path / "both.yaml"
+    cosine_yaml.write_text("kind: threshold\ncosine_threshold: 0.1111\n")
+    model_yaml.write_text("kind: model\nmodel_threshold: 0.2222\n")
+    both_yaml.write_text("kind: ensemble\ncosine_threshold: 0.1111\nmodel_threshold: 0.2222\n")
+    export_refusal.apply_nested_configs(
+        [cosine_yaml, model_yaml, both_yaml],
+        report["serving"]["cosine_threshold"],
+        report["serving"]["model_threshold"],
+    )
+    assert f"cosine_threshold: {report['serving']['cosine_threshold']:.4f}" in cosine_yaml.read_text()
+    assert f"model_threshold: {report['serving']['model_threshold']:.4f}" in model_yaml.read_text()
+    both = both_yaml.read_text()
+    assert f"cosine_threshold: {report['serving']['cosine_threshold']:.4f}" in both
+    assert f"model_threshold: {report['serving']['model_threshold']:.4f}" in both
+    nested_json = tmp_path / "nested.json"
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--cv",
+            str(cv),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--nested-output",
+            str(nested_json),
+            "--update-config",
+            str(cosine_yaml),
+            str(model_yaml),
+        ],
+    )
+    export_refusal.main()
+    payload = json.loads(nested_json.read_text())
+    assert "cosine_threshold" in payload["serving"]
+    assert "model_threshold" in payload["serving"]
+    assert "outer" in payload["serving"]
+    assert "contest" in payload["serving"]["outer"]
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--cv",
+            str(cv),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--nested-output",
+            str(tmp_path / "nested-default.json"),
+            "--update-config",
+        ],
+    )
+    monkeypatch.setattr(export_refusal, "DEFAULT_NESTED_CONFIGS", (both_yaml,))
+    export_refusal.main()
+    assert (tmp_path / "nested-default.json").is_file()
+    monkeypatch.setattr(export_refusal, "bind_checkpoint_embedder", lambda *args, **kwargs: fake_embed)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "export_refusal",
+            "--nested",
+            "--full-retrain",
+            "--cv",
+            str(cv),
+            "--checkpoint",
+            str(tmp_path / "served.pt"),
+            "--output",
+            str(tmp_path / "nested-full.cbm"),
+            "--n-folds",
+            "3",
+            "--k",
+            "2",
+            "--device",
+            "cpu",
+            "--nested-output",
+            str(tmp_path / "nested-full.json"),
+        ],
+    )
+    (tmp_path / "served.pt").write_bytes(b"x")
+    export_refusal.main()
+    assert (tmp_path / "nested-full.cbm").is_file()

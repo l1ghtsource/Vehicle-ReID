@@ -36,13 +36,13 @@ class ReIDModel(nn.Module):
         self.backbone.requires_grad_(not frozen)
         self.backbone.train(not frozen)
 
-    def forward(self, x):
+    def forward(self, x, mask=None):
         if self.frozen:
             self.backbone.eval()
             with torch.no_grad():
-                levels = self.backbone(x)
+                levels = self.backbone(x) if mask is None else self.backbone(x, mask=mask)
         else:
-            levels = self.backbone(x)
+            levels = self.backbone(x) if mask is None else self.backbone(x, mask=mask)
         pooled = [p(z) for p, z in zip(self.pools, levels, strict=True)]
         if self.parts:
             if levels[-1].ndim != 4 or levels[-1].shape[2] < self.parts:
@@ -58,4 +58,14 @@ class ReIDModel(nn.Module):
         raw = self.projection(self.dropout(torch.cat(pooled, dim=1)))
         neck = self.neck(raw)
         emb = neck if self.cfg.head.retrieval_feature == "neck" else raw
-        return {"raw": raw, "neck": neck, "embedding": F.normalize(emb.float(), dim=1)}
+        features = {"raw": raw, "neck": neck, "embedding": F.normalize(emb.float(), dim=1)}
+        last = levels[-1]
+        if last.ndim == 4:
+            patches = last.flatten(2).transpose(1, 2)
+        elif last.ndim == 3:
+            patches = last[:, self.backbone.prefix :]
+        else:
+            patches = None
+        if patches is not None and patches.shape[1] > 0:
+            features["patches"] = patches
+        return features

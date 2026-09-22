@@ -470,6 +470,29 @@ def test_run_trial_success_and_failures(tmp_path, monkeypatch):
     assert "postproc.aqe.enabled=false" in overrides
     assert overrides[-2:] == ["postproc.streaming=true", "postproc.aqe.enabled=false"]
 
+    assert runner.run_trial(trial, "model", checkpoint, [3, 4, 5, 6, 7], tmp_path, "mAP@10", []) == 0.75
+    map10 = json.loads((tmp_path / "trial_00000" / "overrides.json").read_text())
+    assert "checkpointing.monitor='val/mAP@10'" in map10
+    assert "checkpointing.monitor=val/mAP" not in map10
+
+    assert (
+        runner.run_trial(
+            trial,
+            "model",
+            checkpoint,
+            [3, 4, 5, 6, 7],
+            tmp_path,
+            "mAP@10",
+            ["checkpointing.monitor=val/Rank-1"],
+        )
+        == 0.75
+    )
+    user_monitor = json.loads((tmp_path / "trial_00000" / "overrides.json").read_text())
+    assert "checkpointing.monitor=val/Rank-1" in user_monitor
+    assert "checkpointing.monitor='val/mAP@10'" not in user_monitor
+    assert runner.checkpoint_monitor_override("mAP", []) == "checkpointing.monitor=val/mAP"
+    assert runner.checkpoint_monitor_override("mAP", ["checkpointing.monitor=val/Rank-1"]) is None
+
     assert (
         runner.run_trial(
             trial,

@@ -12,10 +12,10 @@ from dataset.datamodule import ReIDDataModule
 from dataset.folds import fingerprint, split_fingerprint
 from models import ReIDModel
 
-from .losses import LossCollection
+from .losses.core import DINO, LossCollection
 from .metrics import retrieval_metrics
 from .optim import build_optimizer, build_scheduler
-from .regularization import EMA, awp
+from .regularization import EMA, awp, eval_mode
 
 
 def _training_batches(trainer):
@@ -73,7 +73,9 @@ class ReIDModule(L.LightningModule):
         self.save_hyperparameters(
             {"cfg": OmegaConf.to_container(cfg, resolve=True), "num_classes": num_classes}
         )
-        self.losses = LossCollection(cfg, self.model.embedding_dim, num_classes)
+        dims = getattr(self.model.backbone, "dims", None)
+        patch_dim = int(dims[-1]) if dims else None
+        self.losses = LossCollection(cfg, self.model.embedding_dim, num_classes, patch_dim=patch_dim)
         self.automatic_optimization = False
         self.ema, self.ema_pending, self.ema_context = None, None, None
         self.val_outputs = []
@@ -82,6 +84,16 @@ class ReIDModule(L.LightningModule):
             raise ValueError("accumulate_grad_batches must be >=1")
         if any(t.name == "adasp" for t in cfg.loss.terms) and cfg.data.sampler.kind != "pk":
             raise ValueError("AdaSP requires PK sampler")
+        if any(t.name == "dino" for t in cfg.loss.terms) and not cfg.train.ema.enabled:
+            raise ValueError("DINO SSL requires train.ema.enabled")
+        if any(isinstance(term, DINO) and term.ibot_weight > 0 for term in self.losses.terms):
+            supported = getattr(self.model.backbone, "supports_token_mask", False)
+            if callable(supported):
+                supported = supported()
+            if not supported:
+                raise ValueError(
+                    "iBOT requires a backbone that applies token masks (llm2clip); set ibot_weight=0"
+                )
         if cfg.train.awp.enabled and cfg.train.accumulate_grad_batches != 1:
             raise ValueError(
                 "AWP currently requires train.accumulate_grad_batches=1 (clean per-batch perturbation)"
@@ -117,6 +129,26 @@ class ReIDModule(L.LightningModule):
         self.model.freeze_backbone(self.current_epoch < self.cfg.train.freeze_backbone_epochs)
 
     def objective(self, batch):
+        dino = any(term.name == "dino" for term in self.cfg.loss.terms)
+        if dino:
+            if "view" not in batch:
+                raise ValueError("DINO requires a second augmented view")
+            if self.ema is None:
+                raise ValueError("DINO SSL requires EMA")
+            images = torch.cat([batch["image"], batch["view"]], 0)
+            with torch.no_grad(), eval_mode(self.model), self.ema.apply(self.model):
+                teacher = self.model(images)
+            mask = None
+            dino_term = next(term for term in self.losses.terms if isinstance(term, DINO))
+            if dino_term.ibot_weight > 0 and "patches" in teacher:
+                mask = dino_term.sample_masks(
+                    teacher["patches"].shape[0], teacher["patches"].shape[1], teacher["patches"].device
+                )
+            first = self.model(images) if mask is None else self.model(images, mask=mask)
+            if mask is not None:
+                first = dict(first)
+                first["mask"] = mask
+            return self.losses(first, batch["label"], teacher)
         first = self.model(batch["image"])
         loss, components = self.losses(first, batch["label"])
         if self.cfg.train.rdrop.enabled:

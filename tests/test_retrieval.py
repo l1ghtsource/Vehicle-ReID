@@ -2,7 +2,7 @@ import numpy as np
 import pytest
 import torch
 
-from modules.metrics import retrieval_metrics
+from modules.metrics import bootstrap_mean_ci, query_retrieval_rows, retrieval_metrics
 from postproc.retrieval import aggregate_gallery, aqe, dense_guard, gnn_rerank, k_reciprocal, normalize
 
 
@@ -65,6 +65,17 @@ def test_map_at_10_truncates_and_uses_min_npos():
     full = retrieval_metrics(np.arange(12, dtype=np.float32)[None], [1], gids, cross_camera=False)
     assert full["mAP"] == 1.0
     assert full["mAP@10"] == 1.0
+    rows = query_retrieval_rows(np.array([[0.1], [0.2]]), [1, 99], [1], cross_camera=False)
+    assert rows[0]["evaluated"] and not rows[1]["evaluated"]
+    assert np.isnan(rows[1]["ap"])
+    ci = bootstrap_mean_ci([0.2, 0.4, 0.6], n_boot=50, seed=0)
+    assert ci["lo"] <= ci["point"] <= ci["hi"]
+    with pytest.raises(ValueError, match="finite"):
+        bootstrap_mean_ci([np.nan])
+    with pytest.raises(ValueError, match="n_boot"):
+        bootstrap_mean_ci([1.0], n_boot=0)
+    with pytest.raises(ValueError, match="alpha"):
+        bootstrap_mean_ci([1.0], alpha=1)
 
 
 def test_reranking_and_memory_guard():

@@ -106,6 +106,18 @@ def checkpoint_path(fold_dir: Path) -> Path:
     return path if path.is_absolute() else PROJECT_ROOT / path
 
 
+def hydra_override(key: str, value: str) -> str:
+    if "@" in value:
+        return f"{key}='{value}'"
+    return f"{key}={value}"
+
+
+def checkpoint_monitor_override(metric: str, base_overrides: list[str]) -> str | None:
+    if any(item.startswith("checkpointing.monitor=") for item in base_overrides):
+        return None
+    return hydra_override("checkpointing.monitor", f"val/{metric}")
+
+
 def has_cuda_oom(paths: list[Path]) -> bool:
     markers = ("CUDA out of memory", "OutOfMemoryError", "CUBLAS_STATUS_ALLOC_FAILED")
     return any(marker in path.read_text(errors="replace") for path in paths for marker in markers)
@@ -174,6 +186,7 @@ def run_trial(
     trial_dir = root / f"trial_{trial.number:05d}"
     trial_dir.mkdir(parents=True, exist_ok=True)
     sampled = suggest_overrides(trial, model, space)
+    monitor = checkpoint_monitor_override(metric, base_overrides)
     fixed = [
         f"model={model}",
         "model.local_files_only=true",
@@ -208,7 +221,7 @@ def run_trial(
         "trainer.max_steps=-1",
         "trainer.enable_progress_bar=false",
         "trainer.sync_batchnorm=false",
-        "checkpointing.monitor=val/mAP",
+        *([] if monitor is None else [monitor]),
         "checkpointing.mode=max",
         "checkpointing.save_top_k=2",
         "checkpointing.save_last=true",

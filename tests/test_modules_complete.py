@@ -1,7 +1,9 @@
+import threading
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 import numpy as np
+import pandas as pd
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -10,10 +12,19 @@ from torch.utils.data import DataLoader, Dataset
 
 import modules.inference as inference
 import modules.losses.core as loss_core
-from modules.inference import embed_loader, embed_tensor, tta_context_pcts
-from modules.losses.core import AdaSP, LossCollection, Triplet
+from modules.inference import (
+    embed_frame,
+    embed_loader,
+    embed_tensor,
+    extract_frame,
+    inference_loader_kwargs,
+    records_frame,
+    tta_context_pcts,
+)
+from modules.losses.core import DINO, AdaSP, LossCollection, Triplet
 from modules.metrics import retrieval_metrics
 from modules.optim import backbone_layer_map, build_optimizer, build_scheduler
+from modules.quality import as_gray, bbox_area, brightness, sharpness
 from modules.regularization import EMA, awp
 
 
@@ -205,6 +216,102 @@ def test_embed_loader_tta_and_guards(cfg, monkeypatch):
     assert embed_loader(EmbedModel(), loader(), cfg, "cuda").shape == (1, 3)
 
 
+def test_embed_frame_averages_context_tta(cfg, monkeypatch):
+    seen = []
+
+    class FakeDataset:
+        def __init__(self, frame, cfg, transform, context_pct=0.0):
+            self.n = len(frame)
+            self.context_pct = float(context_pct)
+            seen.append(self.context_pct)
+
+        def __len__(self):
+            return self.n
+
+    class FakeLoader:
+        def __init__(self, dataset, **kwargs):
+            self.dataset = dataset
+
+    def fake_embed(model, loader, cfg, device):
+        scale = 1.0 + 0.5 * len(seen)
+        return np.ones((len(loader.dataset), 4), dtype=np.float32) * scale
+
+    monkeypatch.setattr(inference, "VehicleDataset", FakeDataset)
+    monkeypatch.setattr(inference, "DataLoader", FakeLoader)
+    monkeypatch.setattr(inference, "build_transforms", lambda cfg: None)
+    monkeypatch.setattr(inference, "embed_loader", fake_embed)
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 10]
+    frame = pd.DataFrame({"image_id": ["a", "b"]})
+    out = embed_frame(object(), cfg, "cpu", frame)
+    assert seen == [0.0, 10.0]
+    expected = np.ones((2, 4), dtype=np.float32) * 1.75
+    expected /= np.linalg.norm(expected, axis=1, keepdims=True)
+    np.testing.assert_allclose(out, expected)
+    cfg.eval.tta.enabled = False
+    seen.clear()
+    off = embed_frame(object(), cfg, "cpu", frame)
+    assert seen == [float(cfg.data.context_pct)]
+    assert off.shape == (2, 4)
+
+
+def test_inference_loader_kwargs_and_records_frame(cfg):
+    cfg.data.num_workers = 0
+    cpu = inference_loader_kwargs(cfg, "cpu")
+    assert cpu["num_workers"] == 0
+    assert cpu["pin_memory"] is False
+    assert cpu["persistent_workers"] is False
+    assert "prefetch_factor" not in cpu
+    cfg.data.num_workers = 3
+    cfg.data.pin_memory = True
+    cfg.data.persistent_workers = True
+    gpu = inference_loader_kwargs(cfg, "cuda")
+    assert gpu["prefetch_factor"] == int(cfg.data.prefetch_factor)
+    assert gpu["pin_memory"] is True
+    assert gpu["persistent_workers"] is True
+    assert inference_loader_kwargs(cfg, "cpu")["pin_memory"] is False
+    frame = records_frame(["a.jpg"], [[1, 2, 3, 4]])
+    assert list(frame.image_path) == ["a.jpg"]
+    assert not bool(frame.full_image.iloc[0])
+    flagged = records_frame(["a.jpg"], [[1, 2, 3, 4]], full_images=[True])
+    assert bool(flagged.full_image.iloc[0])
+    with pytest.raises(ValueError, match="full_images"):
+        records_frame(["a.jpg"], [[1, 2, 3, 4]], full_images=[False, True])
+    with pytest.raises(ValueError):
+        records_frame(["a.jpg"], [[1, 2, 3, 4], [0, 0, 1, 1]])
+
+
+def test_extract_frame_uses_vehicle_dataset(cfg, monkeypatch):
+    seen = {}
+
+    class FakeDataset:
+        def __init__(self, frame, cfg, transform, context_pct=0.0):
+            seen["n"] = len(frame)
+            seen["context"] = float(context_pct)
+            seen["transform"] = transform
+
+        def __len__(self):
+            return seen["n"]
+
+    class FakeLoader:
+        def __init__(self, dataset, **kwargs):
+            seen["loader"] = kwargs
+            self.dataset = dataset
+
+    monkeypatch.setattr(inference, "VehicleDataset", FakeDataset)
+    monkeypatch.setattr(inference, "DataLoader", FakeLoader)
+    monkeypatch.setattr(inference, "embed_loader", lambda model, loader, cfg, device: np.ones((2, 3)))
+    cfg.data.num_workers = 0
+    frame = pd.DataFrame({"image_id": ["a", "b"]})
+    out = extract_frame(object(), cfg, "cpu", frame, batch_size=2, transform="t", context_pct=7.5)
+    assert out.shape == (2, 3)
+    assert seen["n"] == 2
+    assert seen["context"] == 7.5
+    assert seen["transform"] == "t"
+    assert seen["loader"]["batch_size"] == 2
+    assert seen["loader"]["shuffle"] is False
+
+
 def term(name, feature="raw", weight=1.0, params=None):
     return {
         "name": name,
@@ -265,6 +372,99 @@ def test_loss_validation_and_rdrop(monkeypatch):
     collection.terms = nn.ModuleList([NanLoss()])
     with pytest.raises(FloatingPointError):
         collection(features, torch.tensor([0, 0, 1, 1]))
+
+
+def test_dino_distributed_sinkhorn(monkeypatch):
+    calls = []
+
+    def counted(tensor):
+        calls.append(tuple(tensor.shape))
+        return tensor
+
+    monkeypatch.setattr(loss_core.dist, "is_available", lambda: True)
+    monkeypatch.setattr(loss_core.dist, "is_initialized", lambda: True)
+    monkeypatch.setattr(loss_core.dist, "all_reduce", counted)
+    criterion = DINO(4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, sinkhorn_iters=3)
+    x = torch.randn(4, 4, requires_grad=True)
+    loss = criterion(x, x.detach())
+    loss.backward()
+    assert torch.isfinite(loss)
+    image_only = len(calls)
+    patches = torch.randn(4, 5, 4)
+    empty = torch.zeros(4, 5, dtype=torch.bool)
+    masked = empty.clone()
+    masked[0, 0] = True
+    calls.clear()
+    empty_loss = criterion(x.detach(), x.detach(), patches, patches.detach(), empty)
+    empty_n = len(calls)
+    calls.clear()
+    masked_loss = criterion(x.detach(), x.detach(), patches, patches.detach(), masked)
+    assert torch.isfinite(empty_loss)
+    assert torch.isfinite(masked_loss)
+    assert empty_n == len(calls) > image_only
+
+
+class SumCollective:
+    def __init__(self, world: int = 2):
+        self.world = world
+        self.barrier = threading.Barrier(world, timeout=5)
+        self.lock = threading.Lock()
+        self.bucket = []
+        self.total = None
+
+    def __call__(self, value):
+        payload = value.detach().clone()
+        self.barrier.wait()
+        with self.lock:
+            self.bucket.append(payload)
+            if len(self.bucket) == self.world:
+                acc = self.bucket[0]
+                for item in self.bucket[1:]:
+                    acc = acc + item
+                self.total = acc
+                self.bucket.clear()
+        self.barrier.wait()
+        reduced = self.total
+        assert reduced is not None
+        value.copy_(reduced)
+        return value
+
+
+def test_dino_sinkhorn_uses_global_token_count(monkeypatch):
+    criterion = DINO(4, hidden_dim=8, bottleneck_dim=4, out_dim=8, nlayers=1, sinkhorn_iters=3)
+    torch.manual_seed(0)
+    full = torch.randn(8, 8)
+    expected = criterion._sinkhorn(full)
+    monkeypatch.setattr(loss_core.dist, "is_available", lambda: True)
+    monkeypatch.setattr(loss_core.dist, "is_initialized", lambda: True)
+
+    def run_shards(shards):
+        collective = SumCollective(len(shards))
+        monkeypatch.setattr(loss_core.dist, "all_reduce", collective)
+        out = [None] * len(shards)
+        errors = []
+
+        def worker(index, shard):
+            try:
+                out[index] = criterion._sinkhorn(shard)
+            except Exception as error:
+                errors.append(error)
+
+        threads = [threading.Thread(target=worker, args=(index, shard)) for index, shard in enumerate(shards)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(timeout=5)
+            assert not thread.is_alive()
+        assert errors == []
+        tensors = []
+        for item in out:
+            assert isinstance(item, torch.Tensor)
+            tensors.append(item)
+        return torch.cat(tensors)
+
+    torch.testing.assert_close(run_shards([full[:2], full[2:]]), expected, atol=1e-5, rtol=1e-5)
+    torch.testing.assert_close(run_shards([full[:0], full]), expected, atol=1e-5, rtol=1e-5)
 
 
 def test_metrics_validation_and_camera_policy():
@@ -335,3 +535,23 @@ def test_ema_and_awp_all_paths():
     with awp(linear, cfg):
         assert torch.equal(linear.weight, weight)
     assert before
+
+
+def test_quality_bbox_brightness_sharpness():
+    np.testing.assert_allclose(bbox_area([2, 3], [4, 5]), [8, 15])
+    with pytest.raises(ValueError, match="positive"):
+        bbox_area([0], [2])
+    gray = np.arange(9, dtype=np.float64).reshape(3, 3)
+    rgb = np.stack([gray, gray, gray], axis=2)
+    assert as_gray(gray).shape == (3, 3)
+    assert brightness(rgb) == pytest.approx(float(gray.mean()))
+    step = np.zeros((8, 8), dtype=np.float64)
+    step[:, 4:] = 255.0
+    assert sharpness(step) > 0
+    assert sharpness(np.zeros((2, 2))) == 0.0
+    with pytest.raises(ValueError, match="positive"):
+        bbox_area([2], [0])
+    with pytest.raises(ValueError, match="HxW"):
+        as_gray(np.ones((2,)))
+    with pytest.raises(ValueError, match="HxW"):
+        as_gray(np.ones((2, 2, 0)))

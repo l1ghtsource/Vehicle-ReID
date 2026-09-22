@@ -1,7 +1,7 @@
 import numpy as np
 
 
-def retrieval_metrics(
+def query_retrieval_rows(
     distance,
     qids,
     gids,
@@ -15,8 +15,8 @@ def retrieval_metrics(
     qids, gids = np.asarray(qids), np.asarray(gids)
     if d.shape != (len(qids), len(gids)) or not np.isfinite(d).all():
         raise ValueError("Invalid retrieval distance matrix")
-    aps, aps10, inps, hits = [], [], [], {k: [] for k in ranks}
-    no_positive = 0
+    ranks = tuple(int(k) for k in ranks)
+    rows = []
     for i, row in enumerate(d):
         keep = np.ones(len(gids), dtype=bool)
         if cross_camera:
@@ -32,27 +32,78 @@ def retrieval_metrics(
         order = np.argsort(row, kind="stable")
         order = order[keep[order]]
         relevant = gids[order] == qids[i]
-        if not relevant.any():
-            no_positive += 1
+        item = {"n_pos": int(relevant.sum()), "evaluated": bool(relevant.any())}
+        for k in ranks:
+            item[f"Rank-{k}"] = float(relevant[:k].any()) if item["evaluated"] else np.nan
+        if not item["evaluated"]:
+            item["ap"] = np.nan
+            item["ap10"] = np.nan
+            item["minp"] = np.nan
+            rows.append(item)
             continue
         found = np.flatnonzero(relevant)
-        aps.append(np.mean((np.arange(len(found)) + 1) / (found + 1)))
+        item["ap"] = float(np.mean((np.arange(len(found)) + 1) / (found + 1)))
         hits10 = found[found < 10]
         cap = min(len(found), 10)
         if hits10.size == 0:
-            aps10.append(0.0)
+            item["ap10"] = 0.0
         else:
-            aps10.append(float(np.sum((np.arange(len(hits10)) + 1) / (hits10 + 1)) / cap))
-        inps.append(len(found) / (found[-1] + 1))
-        for k in ranks:
-            hits[k].append(float(relevant[:k].any()))
-    if not aps:
+            item["ap10"] = float(np.sum((np.arange(len(hits10)) + 1) / (hits10 + 1)) / cap)
+        item["minp"] = float(len(found) / (found[-1] + 1))
+        rows.append(item)
+    return rows
+
+
+def retrieval_metrics(
+    distance,
+    qids,
+    gids,
+    qcams=None,
+    gcams=None,
+    ranks=(1, 5, 10),
+    cross_camera=True,
+    exclude_all_same_camera=False,
+):
+    ranks = tuple(int(k) for k in ranks)
+    rows = query_retrieval_rows(
+        distance,
+        qids,
+        gids,
+        qcams=qcams,
+        gcams=gcams,
+        ranks=ranks,
+        cross_camera=cross_camera,
+        exclude_all_same_camera=exclude_all_same_camera,
+    )
+    evaluated = [row for row in rows if row["evaluated"]]
+    if not evaluated:
         raise ValueError("No query has a valid gallery positive; cannot report mAP")
     return {
-        "mAP": float(np.mean(aps)),
-        "mAP@10": float(np.mean(aps10)),
-        "mINP": float(np.mean(inps)),
-        **{f"Rank-{k}": float(np.mean(v)) for k, v in hits.items()},
-        "evaluated_queries": len(aps),
-        "queries_without_positive": no_positive,
+        "mAP": float(np.mean([row["ap"] for row in evaluated])),
+        "mAP@10": float(np.mean([row["ap10"] for row in evaluated])),
+        "mINP": float(np.mean([row["minp"] for row in evaluated])),
+        **{f"Rank-{k}": float(np.mean([row[f"Rank-{k}"] for row in evaluated])) for k in ranks},
+        "evaluated_queries": len(evaluated),
+        "queries_without_positive": len(rows) - len(evaluated),
+    }
+
+
+def bootstrap_mean_ci(values, n_boot=1000, seed=0, alpha=0.05):
+    values = np.asarray(values, dtype=np.float64)
+    values = values[np.isfinite(values)]
+    if values.size < 1:
+        raise ValueError("bootstrap requires at least one finite value")
+    if n_boot < 1:
+        raise ValueError("n_boot must be >= 1")
+    if not 0 < alpha < 1:
+        raise ValueError("alpha must be in (0, 1)")
+    rng = np.random.default_rng(seed)
+    draws = rng.choice(values, size=(n_boot, values.size), replace=True).mean(axis=1)
+    lo, hi = np.quantile(draws, [alpha / 2, 1.0 - alpha / 2])
+    return {
+        "n": int(values.size),
+        "point": float(values.mean()),
+        "lo": float(lo),
+        "hi": float(hi),
+        "n_boot": int(n_boot),
     }

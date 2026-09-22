@@ -1,18 +1,26 @@
-from io import BytesIO
-from pathlib import Path
 from time import perf_counter
 
 import numpy as np
 import torch
-from PIL import Image
 from torch.nn import functional as F
 
-from dataset.images import crop_bbox
+from dataset.images import crop_record, decode_images, decode_rgb, preprocess_record, read_file
 from modules.inference import embed_tensor, tta_context_pcts
 
 from .device import as_device, is_cuda, synchronize
 
 STAGES = ("read", "decode", "crop", "preprocess", "h2d", "forward", "l2")
+
+__all__ = [
+    "STAGES",
+    "StageClock",
+    "crop_record",
+    "decode_images",
+    "decode_rgb",
+    "extract",
+    "preprocess_record",
+    "read_file",
+]
 
 
 class StageClock:
@@ -32,26 +40,6 @@ class StageClock:
         self._mark = now
 
 
-def read_file(path) -> bytes:
-    return Path(path).read_bytes()
-
-
-def decode_rgb(payload: bytes) -> Image.Image:
-    with Image.open(BytesIO(payload)) as image:
-        image.load()
-        return image.convert("RGB")
-
-
-def crop_record(image: Image.Image, bbox, context_pct: float, full_image: bool = False) -> Image.Image:
-    if full_image:
-        return image
-    return crop_bbox(image, bbox, context_pct)
-
-
-def preprocess_record(image: Image.Image, transform) -> torch.Tensor:
-    return transform(np.asarray(image))
-
-
 def extract(
     paths,
     bboxes,
@@ -65,10 +53,14 @@ def extract(
     tta=None,
     model_cfg=None,
     timed: bool = False,
+    decode_backend: str = "pil",
+    decode_workers: int = 0,
 ):
     records = list(zip(paths, bboxes, strict=True))
     if not records:
         raise ValueError("Empty extract batch")
+    if decode_workers < 0:
+        raise ValueError("decode_workers must be nonnegative")
     flags = list(full_images) if full_images is not None else [False] * len(records)
     if len(flags) != len(records):
         raise ValueError("full_images must match the batch")
@@ -81,7 +73,7 @@ def extract(
         payload = read_file(path)
         if clock is not None:
             clock.add("read")
-        image = decode_rgb(payload)
+        image = decode_rgb(payload, decode_backend)
         if clock is not None:
             clock.add("decode")
         decoded.append((image, bbox, full_image))

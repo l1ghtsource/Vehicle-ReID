@@ -23,12 +23,17 @@ class ReIDDataModule(L.LightningDataModule):
 
     def setup(self, stage=None):
         cfg = self.cfg
-        if not 0 <= cfg.data.fold < cfg.data.n_folds:
+        full = bool(cfg.data.full_retrain)
+        if not full and not 0 <= cfg.data.fold < cfg.data.n_folds:
             raise ValueError("Invalid data.fold")
         self.folds = ensure_folds(cfg)
-        tr = self.folds[self.folds.fold != cfg.data.fold].copy()
-        va = self.folds[self.folds.fold == cfg.data.fold].copy()
-        assert set(tr.vehicle_id).isdisjoint(va.vehicle_id)
+        if full:
+            tr = self.folds.copy()
+            va = self.folds.copy()
+        else:
+            tr = self.folds[self.folds.fold != cfg.data.fold].copy()
+            va = self.folds[self.folds.fold == cfg.data.fold].copy()
+            assert set(tr.vehicle_id).isdisjoint(va.vehicle_id)
         self.label_map = {int(pid): i for i, pid in enumerate(sorted(tr.vehicle_id.unique()))}
         self.num_classes = len(self.label_map)
         q, g = query_gallery_split(

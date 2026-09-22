@@ -16,6 +16,9 @@ from third_party.eva_clip.eva_vit_model import EVAVisionTransformer
 from third_party.radio.hf_model import RADIOConfig, RADIOModel
 
 from .input_size import spatial_multiple
+from .kernels import attn_kernel_name, patch_eva_attention
+
+TOKEN_MASK_BACKENDS = frozenset({"llm2clip"})
 
 
 def container_dict(value: Any) -> dict[str, Any]:
@@ -157,6 +160,10 @@ class Backbone(nn.Module):
                 state = load_state(path)
                 visual = {k[len("visual.") :]: v for k, v in state.items() if k.startswith("visual.")}
                 self.net.load_state_dict(visual or state, strict=True)
+            if not hasattr(self.net, "mask_token"):
+                width = int(getattr(self.net, "embed_dim", self.dims[0]))
+                self.net.mask_token = nn.Parameter(torch.zeros(1, 1, width))
+                nn.init.trunc_normal_(self.net.mask_token, std=0.02)
         elif cfg.backend == "custom":
             self.net = instantiate(cfg.kwargs)
             self.dims = list(cfg.feature_dims)
@@ -164,8 +171,15 @@ class Backbone(nn.Module):
             raise ValueError(f"Unknown backbone backend {cfg.backend}")
         if cfg.checkpoint_path and cfg.backend not in {"llm2clip", "radio"} and initialize_pretrained:
             self.net.load_state_dict(load_state(cfg.checkpoint_path), strict=True)
+        patch_eva_attention(self.net, attn_kernel_name(cfg))
 
-    def forward(self, x):
+    @property
+    def supports_token_mask(self) -> bool:
+        return self.backend in TOKEN_MASK_BACKENDS
+
+    def forward(self, x, mask=None):
+        if mask is not None and not self.supports_token_mask:
+            raise ValueError("iBOT token masks are only applied by llm2clip; set ibot_weight=0")
         c = self.cfg
         if self.backend == "timm":
             out = self.net(x) if c.features_only else self.net.forward_features(x)
@@ -178,7 +192,8 @@ class Backbone(nn.Module):
         elif self.backend == "radio":
             _, out = self.net(x)
         elif self.backend == "llm2clip":
-            out = self.net.norm(self.net.forward_features(x, return_all_features=True))
+            tokens = self.net.forward_features(x, return_all_features=True, bool_masked_pos=mask)
+            out = self.net.norm(tokens)
         else:
             out = self.net(x)
         out = list(out) if isinstance(out, (list, tuple)) else [out]

@@ -25,12 +25,21 @@ class TinyNet(nn.Module):
         self.config = TinyConfig()
 
 
+class TinyBackbone(nn.Module):
+    supports_token_mask = True
+
+    def __init__(self):
+        super().__init__()
+        self.stem = nn.Linear(3, 3)
+        self.dims = [4]
+        self.net = TinyNet()
+
+
 class TinyReID(nn.Module):
     def __init__(self, cfg, initialize_pretrained=True):
         super().__init__()
         self.linear = nn.Linear(3, 4)
-        self.backbone = nn.Linear(3, 3)
-        self.backbone.net = TinyNet()
+        self.backbone = TinyBackbone()
         self.register_buffer("running", torch.ones(1))
         self.embedding_dim = 4
         self.frozen = False
@@ -38,10 +47,18 @@ class TinyReID(nn.Module):
     def freeze_backbone(self, frozen):
         self.frozen = frozen
 
-    def forward(self, image):
+    def forward(self, image, mask=None):
         pooled = image.mean((-2, -1))
         raw = self.linear(pooled)
-        return {"raw": raw, "neck": raw, "embedding": torch.nn.functional.normalize(raw, dim=1)}
+        patches = raw.unsqueeze(1).repeat(1, 4, 1)
+        if mask is not None:
+            patches = patches.masked_fill(mask.unsqueeze(-1), 0)
+        return {
+            "raw": raw,
+            "neck": raw,
+            "embedding": torch.nn.functional.normalize(raw, dim=1),
+            "patches": patches,
+        }
 
 
 def make_module(cfg, monkeypatch, data_module=None):
@@ -188,6 +205,13 @@ def test_constructor_guards_and_hf_config(cfg, monkeypatch):
     cfg.train.accumulate_grad_batches = 2
     with pytest.raises(ValueError, match="AWP"):
         make_module(cfg, monkeypatch)
+    cfg.train.awp.enabled = False
+    cfg.train.accumulate_grad_batches = 1
+    cfg.loss.terms = [
+        OmegaConf.create({"name": "dino", "weight": 1, "feature": "neck", "params": {"out_dim": 8}})
+    ]
+    with pytest.raises(ValueError, match="DINO SSL requires train.ema"):
+        make_module(cfg, monkeypatch)
 
 
 def test_configure_and_fit_hooks(cfg, monkeypatch):
@@ -256,6 +280,152 @@ def test_training_step_all_paths(cfg, monkeypatch):
     monkeypatch.setattr(module, "lr_schedulers", lambda: [])
     with pytest.raises(RuntimeError, match="one scheduler"):
         module.training_step(batch(), 1)
+
+
+def test_dino_training_step_requires_view_and_ema(cfg, monkeypatch):
+    cfg.train.ema.enabled = True
+    cfg.train.rdrop.enabled = False
+    cfg.loss.terms = [
+        OmegaConf.create(
+            {
+                "name": "dino",
+                "weight": 1,
+                "feature": "neck",
+                "params": {"hidden_dim": 8, "bottleneck_dim": 4, "out_dim": 8, "sinkhorn_iters": 1},
+            }
+        )
+    ]
+    module = make_module(cfg, monkeypatch)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    with pytest.raises(ValueError, match="second augmented view"):
+        module.training_step(batch(), 0)
+    module.ema = EMA(module.model)
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert module.model.linear.weight.grad is not None
+    module.ema = None
+    with pytest.raises(ValueError, match="requires EMA"):
+        module.training_step(payload, 0)
+
+
+def test_dino_teacher_runs_in_eval_and_restores_student(cfg, monkeypatch):
+    seen = []
+
+    class DropReID(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.drop = nn.Dropout(0.5)
+            self.bn = nn.BatchNorm1d(4)
+
+        def forward(self, image, mask=None):
+            seen.append({"model": self.training, "drop": self.drop.training, "bn": self.bn.training})
+            return super().forward(image, mask)
+
+    cfg.train.ema.enabled = True
+    cfg.train.rdrop.enabled = False
+    cfg.loss.terms = [
+        OmegaConf.create(
+            {
+                "name": "dino",
+                "weight": 1,
+                "feature": "neck",
+                "params": {"hidden_dim": 8, "bottleneck_dim": 4, "out_dim": 8, "sinkhorn_iters": 1},
+            }
+        )
+    ]
+    monkeypatch.setattr(lightning_module, "ReIDModel", DropReID)
+    module = ReIDModule(cfg, 2)
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    module.ema = EMA(module.model)
+    module.model.train()
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert seen[0] == {"model": False, "drop": False, "bn": False}
+    assert seen[1] == {"model": True, "drop": True, "bn": True}
+    assert module.model.training
+    assert module.model.get_submodule("drop").training
+    assert module.model.get_submodule("bn").training
+
+
+def test_ibot_requires_token_mask_backbone(cfg, monkeypatch):
+    class NoMaskBackbone(TinyBackbone):
+        supports_token_mask = False
+
+    class CallableBackbone(TinyBackbone):
+        def supports_token_mask(self):
+            return False
+
+    class NoMask(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.backbone = NoMaskBackbone()
+
+    class CallableMask(TinyReID):
+        def __init__(self, cfg, initialize_pretrained=True):
+            super().__init__(cfg, initialize_pretrained)
+            self.backbone = CallableBackbone()
+
+    dino = {
+        "name": "dino",
+        "weight": 1,
+        "feature": "neck",
+        "params": {
+            "hidden_dim": 8,
+            "bottleneck_dim": 4,
+            "out_dim": 8,
+            "sinkhorn_iters": 1,
+            "ibot_weight": 1.0,
+        },
+    }
+    cfg.train.ema.enabled = True
+    cfg.loss.terms = [OmegaConf.create(dino)]
+    monkeypatch.setattr(lightning_module, "ReIDModel", NoMask)
+    with pytest.raises(ValueError, match="token masks"):
+        ReIDModule(cfg, 2)
+    monkeypatch.setattr(lightning_module, "ReIDModel", CallableMask)
+    with pytest.raises(ValueError, match="token masks"):
+        ReIDModule(cfg, 2)
+    cfg.loss.terms[0].params.ibot_weight = 0.0
+    seen = {}
+
+    class Spy(TinyReID):
+        def forward(self, image, mask=None):
+            seen["mask"] = mask
+            return super().forward(image, mask)
+
+    monkeypatch.setattr(lightning_module, "ReIDModel", Spy)
+    module = ReIDModule(cfg, 2)
+    monkeypatch.setattr(module, "log", lambda *args, **kwargs: None)
+    optimizer = FakeOptimizer(module.parameters())
+    scheduler = SimpleNamespace(step=lambda: None)
+    module._trainer = trainer()
+    monkeypatch.setattr(module, "optimizers", lambda: optimizer)
+    monkeypatch.setattr(module, "lr_schedulers", lambda: scheduler)
+    monkeypatch.setattr(module, "manual_backward", lambda loss: loss.backward())
+    monkeypatch.setattr(module, "clip_gradients", lambda *args, **kwargs: None)
+    module.ema = EMA(module.model)
+    payload = batch()
+    payload["view"] = payload["image"].clone()
+    result = module.training_step(payload, 0)
+    assert torch.isfinite(result)
+    assert seen["mask"] is None
 
 
 class Scale:

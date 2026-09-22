@@ -5,6 +5,28 @@ from pathlib import Path
 import numpy as np
 
 
+def checkpoint_epoch(path: Path) -> int:
+    name = Path(path).stem
+    if not name.startswith("epoch") or not name.removeprefix("epoch").isdigit():
+        raise ValueError(f"Cannot read stop epoch from {path}")
+    return int(name.removeprefix("epoch"))
+
+
+def completed_epochs(path: Path) -> int:
+    return checkpoint_epoch(path) + 1
+
+
+def mean_stop_epochs(cv_root: Path, n_folds: int = 5) -> int:
+    if n_folds < 1:
+        raise ValueError("n_folds must be >= 1")
+    root = Path(cv_root)
+    values = []
+    for fold in range(n_folds):
+        metrics = json.loads((root / f"fold{fold}" / "val" / "metrics.json").read_text())
+        values.append(completed_epochs(Path(metrics["checkpoint"])))
+    return int(round(sum(values) / len(values)))
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("metrics", nargs="+", type=Path)

@@ -8,8 +8,10 @@ from omegaconf import OmegaConf
 from PIL import Image
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.data import DataLoader, TensorDataset
 
-from modules.inference import autocast_context, tta_context_pcts
+from dataset.images import VehicleDataset
+from modules.inference import autocast_context, embed_frame, extract_frame, records_frame, tta_context_pcts
 from profiling import (
     CONTEST_SUFFIXES,
     EXTRA_SUFFIXES,
@@ -29,6 +31,7 @@ from profiling import (
     latency_score,
     make_runner,
     measure_latency,
+    measure_stages,
     measure_throughput,
     measure_vram,
     mem_info,
@@ -49,7 +52,8 @@ from profiling import (
     timed,
 )
 from profiling import device as device_mod
-from profiling.extract import crop_record, extract, preprocess_record
+from profiling.extract import crop_record, decode_images, extract, preprocess_record
+from profiling.run import BatchStream, RepeatDataset, make_loader_runner
 from profiling.weights import is_contest_weight, is_extra_weight, iter_files
 
 
@@ -216,6 +220,35 @@ def test_extract_stages_and_guards(tmp_path):
     assert again.shape == (1, 8)
     gray = extract([tmp_path / "gray.jpg"], [[0, 0, 8, 8]], tiny_transform, model, "cpu", precision="bf16")
     assert gray.shape == (1, 8)
+    payload = read_file(paths[0])
+    cv_image = decode_rgb(payload, "cv2")
+    assert cv_image.mode == "RGB" and cv_image.size == decode_rgb(payload).size
+    assert len(decode_images([payload, payload], backend="cv2", workers=2)) == 2
+    assert len(decode_images([payload], backend="pil", workers=4)) == 1
+    jpeg = decode_rgb(payload, "jpeg")
+    assert jpeg.mode == "RGB" and jpeg.size == decode_rgb(payload).size
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        decode_rgb(payload, "jpeg_cuda")
+    with pytest.raises(ValueError, match="pil/cv2/jpeg"):
+        decode_rgb(payload, "turbo")
+    with pytest.raises(ValueError, match="Failed to decode"):
+        decode_rgb(b"not-an-image", "cv2")
+    parallel = extract(
+        paths[:2],
+        bboxes[:2],
+        tiny_transform,
+        model,
+        "cpu",
+        decode_backend="cv2",
+        decode_workers=2,
+    )
+    assert parallel.shape == (2, 8)
+    jpeg_out = extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_backend="jpeg")
+    assert jpeg_out.shape == (1, 8)
+    with pytest.raises(ValueError, match="jpeg_cuda"):
+        extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_backend="jpeg_cuda")
+    with pytest.raises(ValueError, match="decode_workers"):
+        extract(paths[:1], bboxes[:1], tiny_transform, model, "cpu", decode_workers=-1)
 
 
 class CountingReID(DummyReID):
@@ -292,6 +325,259 @@ def test_extract_context_tta_matches_eval_forwards(tmp_path):
     assert np.allclose(both, mean, atol=1e-5)
 
 
+def test_extract_frame_matches_sequential_extract(cfg, tmp_path):
+    paths, bboxes = records(tmp_path, 2)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    sequential = extract(paths, bboxes, tiny_transform, model, "cpu", context_pct=5.0)
+    frame = records_frame(paths, bboxes)
+    loaded = extract_frame(
+        model,
+        cfg,
+        "cpu",
+        frame,
+        batch_size=2,
+        transform=tiny_transform,
+        context_pct=5.0,
+    )
+    assert np.allclose(sequential, loaded, atol=1e-5)
+
+
+def test_loader_runner_streams_one_iterator(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
+    seen = []
+    original = VehicleDataset.__getitem__
+
+    def spy(self, index):
+        seen.append(int(index))
+        return original(self, index)
+
+    monkeypatch.setattr(VehicleDataset, "__getitem__", spy)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.persistent_workers = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    for _ in range(8):
+        assert runner(1).shape == (1, 8)
+    assert seen[:8] == [0, 1, 2, 3, 0, 1, 2, 3]
+    cold = runner.cold_start_s()
+    assert len(cold) == 1
+    assert cold[0]["batch_size"] == 1
+    assert cold[0]["seconds"] >= 0
+    runner.release()
+    assert runner.cold_start_s()[0]["batch_size"] == 1
+    with pytest.raises(ValueError, match="repeat dataset"):
+        RepeatDataset([])
+    closed = BatchStream(DataLoader(TensorDataset(torch.zeros(1, 1)), batch_size=1))
+    assert closed.iterator is None
+    closed.close()
+
+
+def test_loader_runner_matches_embed_frame_context_tta(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 2)
+    model = CountingReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.context_pct = 0.0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 50]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    monkeypatch.setattr("modules.inference.build_transforms", lambda cfg: tiny_transform)
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    model.calls = 0
+    got = runner(2)
+    assert model.calls == 2
+    frame = records_frame(paths, bboxes)
+    model.calls = 0
+    expected = embed_frame(model, cfg, "cpu", frame)
+    assert model.calls == 2
+    assert np.max(np.abs(got - expected)) < 1e-5
+
+
+def test_loader_runner_releases_workers_between_batch_sizes(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
+    live = []
+
+    class Iterator:
+        def __init__(self, loader):
+            self.loader = loader
+            self.closed = False
+            live.append(self)
+
+        def __next__(self):
+            if self.closed:
+                raise RuntimeError("iterator already closed")
+            return {"image": torch.zeros(self.loader.batch_size, 3, 8, 8)}
+
+        def _shutdown_workers(self):
+            self.closed = True
+            live.remove(self)
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+            self.kwargs = kwargs
+
+        def __iter__(self):
+            return Iterator(self)
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 2
+    cfg.data.pin_memory = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 50]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    runner(1)
+    runner(1)
+    assert len(live) == 2
+    runner(8)
+    assert len(live) == 2
+    assert {item.loader.batch_size for item in live} == {8}
+    runner.release()
+    assert live == []
+
+
+def test_repeated_context_uses_the_same_images(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
+    for index, path in enumerate(paths):
+        Image.new("RGB", (20, 16), (index * 40, 20, 80)).save(path, format="JPEG")
+    seen = []
+    original = VehicleDataset.__getitem__
+
+    def spy(self, index):
+        seen.append(int(index))
+        return original(self, index)
+
+    monkeypatch.setattr(VehicleDataset, "__getitem__", spy)
+    monkeypatch.setattr("modules.inference.build_transforms", lambda cfg: tiny_transform)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.context_pct = 0.0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 0]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    got = runner(2)
+    assert seen[:4] == [0, 1, 0, 1]
+    frame = records_frame(paths[:2], bboxes[:2])
+    expected = embed_frame(model, cfg, "cpu", frame)
+    assert np.max(np.abs(got - expected)) < 1e-5
+    cold = runner.cold_start_s()
+    assert [row["view"] for row in cold] == [0, 1]
+    assert [row["context_pct"] for row in cold] == [0.0, 0.0]
+
+
+def test_loader_runner_cold_start_skips_failed_open(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 2)
+
+    class Iterator:
+        def __next__(self):
+            raise RuntimeError("worker failed")
+
+        def _shutdown_workers(self):
+            return None
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+
+        def __iter__(self):
+            return Iterator()
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    cfg.data.num_workers = 0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, DummyReID(), "cpu", cfg)
+    with pytest.raises(RuntimeError, match="worker failed"):
+        runner(1)
+    assert runner.cold_start_s() == []
+    runner.release()
+
+
+@pytest.mark.parametrize("stage", ["throughput", "vram"])
+def test_profile_extract_releases_loader_when_measurement_raises(cfg, tmp_path, monkeypatch, stage):
+    paths, bboxes = records(tmp_path, 2)
+    live = []
+    opened = []
+
+    class Iterator:
+        def __init__(self, loader):
+            self.loader = loader
+            self.steps = 0
+            live.append(self)
+            opened.append(self)
+
+        def __next__(self):
+            self.steps += 1
+            if stage == "throughput" and len(opened) == 1 and self.steps == 2:
+                raise RuntimeError("oom")
+            if stage == "vram" and len(opened) >= 2:
+                raise RuntimeError("oom")
+            return {"image": torch.zeros(self.loader.batch_size, 3, 8, 8)}
+
+        def _shutdown_workers(self):
+            live.remove(self)
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+
+        def __iter__(self):
+            return Iterator(self)
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    with pytest.raises(RuntimeError, match="oom"):
+        profile_extract(
+            roots=[tmp_path],
+            paths=paths,
+            bboxes=bboxes,
+            transform=tiny_transform,
+            model=model,
+            device="cpu",
+            load_ms=0.0,
+            warmup=0,
+            repeats=1,
+            batch_sizes=(1,),
+            min_seconds=0.0,
+            vram_repeats=1,
+            stage_repeats=1,
+            cfg=cfg,
+        )
+    assert opened
+    assert live == []
+    assert len(opened) == (1 if stage == "throughput" else 2)
+
+
 def test_embed_tta_and_amp(monkeypatch):
     model = DummyReID()
     model.eval()
@@ -353,7 +639,7 @@ def test_embed_tta_and_amp(monkeypatch):
     assert seen == [torch.bfloat16, torch.float16]
 
 
-def test_protocol_and_profile(tmp_path):
+def test_protocol_and_profile(cfg, tmp_path):
     paths, bboxes = records(tmp_path, 4)
     model = DummyReID()
     model.eval()
@@ -382,6 +668,7 @@ def test_protocol_and_profile(tmp_path):
         min_seconds=0.0,
         vram_repeats=1,
         stage_repeats=2,
+        cfg=None,
     )
     assert report["contest"]["latency_b1_ms"] == report["latency"]["p50_ms"]
     assert report["throughput"]["best_fps"] > 0
@@ -404,10 +691,49 @@ def test_protocol_and_profile(tmp_path):
         stage_repeats=1,
     )
     assert none_ckpt["checkpoint"] is None
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.decode_backend = "cv2"
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    serving_report = profile_extract(
+        roots=[tmp_path],
+        paths=paths,
+        bboxes=bboxes,
+        transform=tiny_transform,
+        model=model,
+        device="cpu",
+        load_ms=0.0,
+        warmup=0,
+        repeats=1,
+        batch_sizes=(1, 2),
+        min_seconds=0.0,
+        vram_repeats=1,
+        stage_repeats=1,
+        cfg=cfg,
+    )
+    assert serving_report["throughput"]["best_fps"] > 0
+    assert serving_report["throughput"]["cold_start_s"]
     runner = make_runner(paths, bboxes, tiny_transform, model, "cpu")
     assert runner(1).shape[0] == 1
     latency = measure_latency(lambda: runner(1), "cpu", warmup=1, repeats=2)
     assert latency["n"] == 2
+    order = []
+
+    def mark_warm():
+        order.append("warm")
+
+    def mark_stage():
+        order.append("stage")
+        return None, {"per_image_ms": {"forward": 1.0, "decode": 2.0}}
+
+    stages = measure_stages(mark_warm, mark_stage, "cpu", warmup=2, repeats=3)
+    assert order == ["warm", "warm", "stage", "stage", "stage"]
+    assert stages == {"forward": 1.0, "decode": 2.0}
+    with pytest.raises(ValueError, match="warmup"):
+        measure_stages(mark_warm, mark_stage, "cpu", warmup=-1, repeats=1)
+    with pytest.raises(ValueError, match="repeats"):
+        measure_stages(mark_warm, mark_stage, "cpu", warmup=0, repeats=0)
     thr = measure_throughput(
         lambda size: runner(size), "cpu", batch_sizes=(1,), min_seconds=0, warmup_batches=0
     )
@@ -430,6 +756,14 @@ def test_protocol_and_profile(tmp_path):
         measure_throughput(lambda size: None, "cpu", batch_sizes=(1,), min_seconds=-1)
     with pytest.raises(ValueError, match="warmup_batches"):
         measure_throughput(lambda size: None, "cpu", batch_sizes=(1,), warmup_batches=-1)
+    with pytest.raises(ValueError, match="no images"):
+        measure_throughput(
+            lambda size: np.zeros((0, 2)),
+            "cpu",
+            batch_sizes=(1,),
+            min_seconds=0,
+            warmup_batches=0,
+        )
     with pytest.raises(ValueError, match="repeats"):
         measure_vram(lambda size: None, "cpu", repeats=0)
     with pytest.raises(ValueError, match="shapes"):

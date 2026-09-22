@@ -9,13 +9,10 @@ import pandas as pd
 import torch
 from hydra import compose, initialize_config_dir
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
 
-from augmentations import build_transforms
 from dataset.folds import query_gallery_split, read_annotations
-from dataset.images import VehicleDataset
 from models import ReIDModel
-from modules.inference import embed_loader, tta_context_pcts
+from modules.inference import embed_frame
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
 
@@ -63,20 +60,7 @@ def main() -> None:
     combined = pd.concat([query, gallery], ignore_index=True)
     device = torch.device(cfg.eval.device)
     model = ReIDModel(cfg).to(device).eval()
-    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
-    views = []
-    for context in contexts:
-        dataset = VehicleDataset(combined, cfg, build_transforms(cfg), context_pct=float(context))
-        loader = DataLoader(
-            dataset,
-            batch_size=cfg.data.batch_size_eval,
-            shuffle=False,
-            num_workers=cfg.data.num_workers,
-            pin_memory=cfg.data.pin_memory,
-        )
-        views.append(embed_loader(model, loader, cfg, device))
-    emb = np.stack(views).mean(0)
-    emb /= np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
+    emb = embed_frame(model, cfg, device, combined)
     qe, ge = emb[: len(query)], emb[len(query) :]
     distance, expanded_q, expanded_g = postprocess(qe, ge, cfg.postproc)
     metric_args = dict(

@@ -7,12 +7,14 @@ import lightning as L
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from torch import nn
 
 from dataset import ReIDDataModule
 from dataset.folds import fingerprint, split_fingerprint
+from eval import SERVING_FORMAT, load_result_keys
 from modules.lightning_module import ReIDModule, is_partial_validation
+from scripts.aggregate_cv import mean_stop_epochs
 
 
 def container_dict(value: Any) -> dict[str, Any]:
@@ -24,19 +26,30 @@ def container_dict(value: Any) -> dict[str, Any]:
 
 def load_initial_weights(module: nn.Module, path: str | Path) -> str:
     checkpoint = torch.load(path, map_location="cpu", weights_only=False)
-    choice = checkpoint.get("validation_weights", "raw")
-    if choice == "ema" and "ema" in checkpoint:
-        state = {f"model.{key}": value for key, value in checkpoint["ema"]["shadow"].items()}
+    if checkpoint.get("format") == SERVING_FORMAT:
+        payload = checkpoint.get("state_dict") or {}
+        if not payload:
+            raise ValueError("Serving payload is missing state_dict")
+        state = {f"model.{key}": value for key, value in payload.items()}
+        choice = str(checkpoint.get("weights") or "raw")
     else:
-        choice = "raw"
-        state = {key: value for key, value in checkpoint["state_dict"].items() if key.startswith("model.")}
+        choice = checkpoint.get("validation_weights", "raw")
+        if choice == "ema" and "ema" in checkpoint:
+            state = {f"model.{key}": value for key, value in checkpoint["ema"]["shadow"].items()}
+        else:
+            choice = "raw"
+            state = {
+                key: value for key, value in checkpoint["state_dict"].items() if key.startswith("model.")
+            }
     try:
-        missing, unexpected = module.load_state_dict(state, strict=False)
+        missing, unexpected = load_result_keys(module.load_state_dict(state, strict=False))
     except RuntimeError as error:
         raise ValueError(
             "Initial checkpoint requires the same model, pooling, and head configuration"
         ) from error
-    missing_model = [key for key in missing if key.startswith("model.")]
+    missing_model = [
+        key for key in missing if key.startswith("model.") and not str(key).endswith("mask_token")
+    ]
     if missing_model or unexpected:
         raise ValueError(
             f"Initial checkpoint model mismatch: missing={missing_model}, unexpected={unexpected}"
@@ -44,10 +57,21 @@ def load_initial_weights(module: nn.Module, path: str | Path) -> str:
     return choice
 
 
+def apply_full_retrain(cfg) -> None:
+    if not cfg.data.full_retrain:
+        return
+    with open_dict(cfg):
+        if cfg.data.cv_dir:
+            cfg.train.epochs = mean_stop_epochs(Path(str(cfg.data.cv_dir)), int(cfg.data.n_folds))
+        cfg.trainer.limit_val_batches = 0
+        cfg.trainer.num_sanity_val_steps = 0
+
+
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")
 def main(cfg):
     if cfg.resume and cfg.init_checkpoint:
         raise ValueError("resume and init_checkpoint are mutually exclusive")
+    apply_full_retrain(cfg)
     L.seed_everything(cfg.seed, workers=True)
     torch.set_float32_matmul_precision("highest" if cfg.trainer.deterministic else "high")
     dm = ReIDDataModule(cfg)

@@ -11,18 +11,16 @@ from hydra.core.hydra_config import HydraConfig
 from hydra.core.override_parser.overrides_parser import OverridesParser
 from hydra.errors import HydraException
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader
 
-from augmentations import build_transforms
 from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
-from dataset.images import VehicleDataset
 from models import ReIDModel
-from modules.inference import embed_loader, tta_context_pcts
+from models.kernels import prepare_inference_model
+from modules.inference import embed_frame
 from modules.metrics import retrieval_metrics
 from postproc import postprocess
 from refusal import refusal_accept, write_candidates
 
-DATA_ROOT_PATHS = ("train_csv", "query_csv", "gallery_csv", "image_dir")
+DATA_ROOT_PATHS = ("train_csv", "val_source_csv", "query_csv", "gallery_csv", "image_dir")
 
 
 def task_overrides() -> list[str]:
@@ -50,6 +48,14 @@ def override_key(item: str) -> str | None:
     return key
 
 
+EVAL_PROTOCOL = {
+    "data.validation.exclude_all_same_camera": False,
+}
+RUNTIME_DEFAULTS = {
+    "data.decode_backend": "pil",
+}
+
+
 def remount_data_root(saved, effective, overridden: set[str]) -> None:
     if "data.root" not in overridden:
         return
@@ -62,6 +68,28 @@ def remount_data_root(saved, effective, overridden: set[str]) -> None:
         current = Path(str(OmegaConf.select(effective, key)))
         if current.is_relative_to(old_root):
             OmegaConf.update(effective, key, str(new_root / current.relative_to(old_root)))
+
+
+def protocol_overridden(key: str, overridden: set[str]) -> bool:
+    return any(key == item or key.startswith(f"{item}.") for item in overridden)
+
+
+def apply_runtime_defaults(cfg, effective) -> None:
+    missing = object()
+    for key, default in RUNTIME_DEFAULTS.items():
+        if OmegaConf.select(effective, key, default=missing) is not missing:
+            continue
+        value = OmegaConf.select(cfg, key, default=missing)
+        OmegaConf.update(effective, key, default if value is missing else value)
+
+
+def apply_eval_protocol(cfg, effective, overridden: set[str]) -> None:
+    missing = object()
+    for key, default in EVAL_PROTOCOL.items():
+        if protocol_overridden(key, overridden):
+            continue
+        value = OmegaConf.select(cfg, key, default=missing)
+        OmegaConf.update(effective, key, default if value is missing else value)
 
 
 def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
@@ -84,6 +112,16 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
     streaming = OmegaConf.select(cfg, "postproc.streaming", default=missing)
     if streaming is not missing:
         overlay["postproc"] = {"streaming": streaming}
+    runtime_backend = OmegaConf.select(cfg, "model.backend", default=missing)
+    saved_backend = OmegaConf.select(saved, "model.backend", default=missing)
+    if runtime_backend is not missing and runtime_backend == saved_backend:
+        model_overlay = {}
+        for key in ("attn_kernel", "compile", "compile_mode", "compile_dynamic", "compile_embedding"):
+            value = OmegaConf.select(cfg, f"model.{key}", default=missing)
+            if value is not missing:
+                model_overlay[key] = value
+        if model_overlay:
+            overlay["model"] = model_overlay
     effective = OmegaConf.merge(saved, overlay)
     overridden: set[str] = set()
     for item in task_overrides() if override_items is None else override_items:
@@ -96,6 +134,8 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
             continue
         OmegaConf.update(effective, key, value, merge=True)
     remount_data_root(saved, effective, overridden)
+    apply_runtime_defaults(cfg, effective)
+    apply_eval_protocol(cfg, effective, overridden)
     return effective
 
 
@@ -153,6 +193,23 @@ def build_serving_payload(blob, weights="ema"):
     }
 
 
+def load_result_keys(result):
+    missing = getattr(result, "missing_keys", None)
+    unexpected = getattr(result, "unexpected_keys", None)
+    if missing is not None and unexpected is not None:
+        return list(missing), list(unexpected)
+    if isinstance(result, tuple) and len(result) == 2:
+        return list(result[0]), list(result[1])
+    return [], []
+
+
+def load_compatible_state(model, state):
+    missing, unexpected = load_result_keys(model.load_state_dict(state, strict=False))
+    missing = [key for key in missing if not str(key).endswith("mask_token")]
+    if missing or unexpected:
+        raise ValueError(f"Checkpoint model mismatch: missing={missing}, unexpected={unexpected}")
+
+
 def load_model(cfg, override_items: list[str] | None = None):
     if not cfg.checkpoint:
         raise ValueError("Pass checkpoint=/path/to/weights.pt")
@@ -161,7 +218,7 @@ def load_model(cfg, override_items: list[str] | None = None):
     effective = overlay_eval_config(saved, cfg, override_items)
     model = ReIDModel(effective, initialize_pretrained=False)
     state, choice = select_state(checkpoint, cfg.eval.weights)
-    model.load_state_dict(state, strict=True)
+    load_compatible_state(model, state)
     return model, effective, checkpoint, choice
 
 
@@ -170,9 +227,9 @@ def main(cfg):
     model, cfg, checkpoint, choice = load_model(cfg)
     L.seed_everything(cfg.seed, workers=True)
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
-    torch.use_deterministic_algorithms(bool(cfg.trainer.deterministic))
     device = torch.device(cfg.eval.device)
     model.to(device).eval()
+    model = prepare_inference_model(model, cfg)
     if cfg.eval.split == "val":
         folds = ensure_folds(cfg)
         if checkpoint.get("data_fingerprint") != fingerprint(folds):
@@ -203,20 +260,7 @@ def main(cfg):
         g_indices = np.arange(len(q), len(frame))
     else:
         raise ValueError("eval.split must be val/test")
-    contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
-    views = []
-    for context in contexts:
-        ds = VehicleDataset(frame, cfg, build_transforms(cfg), context_pct=float(context))
-        loader = DataLoader(
-            ds,
-            batch_size=cfg.data.batch_size_eval,
-            shuffle=False,
-            num_workers=cfg.data.num_workers,
-            pin_memory=cfg.data.pin_memory,
-        )
-        views.append(embed_loader(model, loader, cfg, device))
-    emb = np.stack(views).mean(0)
-    emb /= np.maximum(np.linalg.norm(emb, axis=1, keepdims=True), 1e-12)
+    emb = embed_frame(model, cfg, device, frame)
     qe, ge = emb[q_indices], emb[g_indices]
     distance, expanded_q, expanded_g = postprocess(qe, ge, cfg.postproc)
     out = Path(cfg.eval.output_dir)
@@ -242,7 +286,7 @@ def main(cfg):
         columns=pd.Index([f"gallery_id_{j + 1}" for j in range(k)]),
     )
     sub.insert(0, "query_id", q.image_id.to_numpy())
-    sub.to_csv(out / "submission.csv", index=False)
+    sub.to_csv(out / "submission.csv", index=False, header=False)
     spec = cfg.refusal
     feature_k = int(cfg.eval.top_k) if spec.k is None else int(spec.k)
     embeds = True if spec.with_embeddings is None else bool(spec.with_embeddings)

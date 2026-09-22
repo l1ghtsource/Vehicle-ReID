@@ -7,8 +7,17 @@ import torch
 from eval import build_serving_payload
 from scripts.verify_weights import write_sha256sums
 
+DEFAULT_SUMMARY = Path("runs/full/eva02_trial23/run_summary.json")
 DEFAULT_METRICS = Path("runs/cv/eva02_trial23/fold0/val/metrics.json")
 DEFAULT_OUTPUT = Path("weights/finetuned/eva02.pt")
+
+
+def listed_checkpoint(payload: dict) -> Path:
+    for key in ("last_checkpoint", "best_checkpoint", "checkpoint"):
+        value = payload.get(key)
+        if value:
+            return Path(str(value))
+    raise ValueError("No checkpoint path in default metadata")
 
 
 def source_checkpoint(path: Path | None) -> Path:
@@ -17,13 +26,14 @@ def source_checkpoint(path: Path | None) -> Path:
         if not source.is_file():
             raise FileNotFoundError(source)
         return source
-    if not DEFAULT_METRICS.is_file():
-        raise ValueError("Pass --checkpoint; fold-0 metrics.json was not found")
-    listed = json.loads(DEFAULT_METRICS.read_text())["checkpoint"]
-    source = Path(listed)
-    if not source.is_file():
-        raise FileNotFoundError(source)
-    return source
+    for default in (DEFAULT_SUMMARY, DEFAULT_METRICS):
+        if not default.is_file():
+            continue
+        source = listed_checkpoint(json.loads(default.read_text()))
+        if not source.is_file():
+            raise FileNotFoundError(source)
+        return source
+    raise ValueError("Pass --checkpoint; no full-retrain run_summary.json or fold-0 metrics.json was found")
 
 
 def export_serving(source: Path, destination: Path, weights: str = "ema") -> Path:

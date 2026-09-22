@@ -557,9 +557,14 @@ class EVAVisionTransformer(nn.Module):
         self.num_classes = num_classes
         self.head = nn.Linear(self.embed_dim, num_classes) if num_classes > 0 else nn.Identity()
 
-    def forward_features(self, x, return_all_features=False):
+    def forward_features(self, x, return_all_features=False, bool_masked_pos=None):
         
         x = self.patch_embed(x)
+        if bool_masked_pos is not None:
+            token = getattr(self, "mask_token", None)
+            if token is None:
+                raise ValueError("mask_token is required for masked SSL")
+            x = torch.where(bool_masked_pos.unsqueeze(-1), token.to(dtype=x.dtype), x)
         batch_size, seq_len, _ = x.size()
 
         cls_tokens = self.cls_token.expand(batch_size, -1, -1)  # stole cls_tokens impl from Phil Wang, thanks

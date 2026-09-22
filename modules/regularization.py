@@ -3,6 +3,17 @@ from contextlib import contextmanager
 import torch
 
 
+@contextmanager
+def eval_mode(module):
+    flags = [child.training for child in module.modules()]
+    try:
+        module.eval()
+        yield
+    finally:
+        for child, flag in zip(module.modules(), flags, strict=True):
+            child.training = flag
+
+
 class EMA:
     def __init__(self, model, decay=0.999):
         self.decay = decay
