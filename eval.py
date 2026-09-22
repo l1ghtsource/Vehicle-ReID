@@ -286,7 +286,7 @@ def main(cfg):
         columns=pd.Index([f"gallery_id_{j + 1}" for j in range(k)]),
     )
     sub.insert(0, "query_id", q.image_id.to_numpy())
-    sub.to_csv(out / "submission.csv", index=False)
+    sub.to_csv(out / "submission.csv", index=False, header=False)
     spec = cfg.refusal
     feature_k = int(cfg.eval.top_k) if spec.k is None else int(spec.k)
     embeds = True if spec.with_embeddings is None else bool(spec.with_embeddings)

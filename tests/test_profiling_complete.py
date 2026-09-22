@@ -8,6 +8,7 @@ from omegaconf import OmegaConf
 from PIL import Image
 from torch import nn
 from torch.nn import functional as F
+from torch.utils.data import DataLoader, TensorDataset
 
 from dataset.images import VehicleDataset
 from modules.inference import autocast_context, embed_frame, extract_frame, records_frame, tta_context_pcts
@@ -375,7 +376,9 @@ def test_loader_runner_streams_one_iterator(cfg, tmp_path, monkeypatch):
     assert runner.cold_start_s()[0]["batch_size"] == 1
     with pytest.raises(ValueError, match="repeat dataset"):
         RepeatDataset([])
-    BatchStream(object()).close()
+    closed = BatchStream(DataLoader(TensorDataset(torch.zeros(1, 1)), batch_size=1))
+    assert closed.iterator is None
+    closed.close()
 
 
 def test_loader_runner_matches_embed_frame_context_tta(cfg, tmp_path, monkeypatch):
@@ -513,6 +516,66 @@ def test_loader_runner_cold_start_skips_failed_open(cfg, tmp_path, monkeypatch):
         runner(1)
     assert runner.cold_start_s() == []
     runner.release()
+
+
+@pytest.mark.parametrize("stage", ["throughput", "vram"])
+def test_profile_extract_releases_loader_when_measurement_raises(cfg, tmp_path, monkeypatch, stage):
+    paths, bboxes = records(tmp_path, 2)
+    live = []
+    opened = []
+
+    class Iterator:
+        def __init__(self, loader):
+            self.loader = loader
+            self.steps = 0
+            live.append(self)
+            opened.append(self)
+
+        def __next__(self):
+            self.steps += 1
+            if stage == "throughput" and len(opened) == 1 and self.steps == 2:
+                raise RuntimeError("oom")
+            if stage == "vram" and len(opened) >= 2:
+                raise RuntimeError("oom")
+            return {"image": torch.zeros(self.loader.batch_size, 3, 8, 8)}
+
+        def _shutdown_workers(self):
+            live.remove(self)
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+
+        def __iter__(self):
+            return Iterator(self)
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    with pytest.raises(RuntimeError, match="oom"):
+        profile_extract(
+            roots=[tmp_path],
+            paths=paths,
+            bboxes=bboxes,
+            transform=tiny_transform,
+            model=model,
+            device="cpu",
+            load_ms=0.0,
+            warmup=0,
+            repeats=1,
+            batch_sizes=(1,),
+            min_seconds=0.0,
+            vram_repeats=1,
+            stage_repeats=1,
+            cfg=cfg,
+        )
+    assert opened
+    assert live == []
+    assert len(opened) == (1 if stage == "throughput" else 2)
 
 
 def test_embed_tta_and_amp(monkeypatch):

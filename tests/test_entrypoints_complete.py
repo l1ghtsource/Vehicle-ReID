@@ -553,12 +553,13 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     data_cfg.eval.output_dir = str(tmp_path / "val_refuse")
     eval_module.main.__wrapped__(data_cfg)
     refused = pd.read_csv(tmp_path / "val_refuse/candidates.csv")
-    kept = pd.read_csv(tmp_path / "val_refuse/submission.csv")
+    kept = pd.read_csv(tmp_path / "val_refuse/submission.csv", header=None)
     refuse_meta = json.loads((tmp_path / "val_refuse/metrics.json").read_text())
     assert refused.empty
     assert len(kept) == refuse_meta["n_query"]
-    assert "confidence" not in kept.columns
-    assert list(kept.columns)[:1] == ["query_id"]
+    assert kept.shape[1] == 1 + int(data_cfg.eval.top_k)
+    first = (tmp_path / "val_refuse/submission.csv").read_text().splitlines()[0]
+    assert not first.startswith("query_id")
     assert refuse_meta["refusal"]["kind"] == "threshold"
     assert refuse_meta["refusal"]["n_refuse"] == refuse_meta["n_query"]
     data_cfg.refusal.kind = "model"
@@ -579,6 +580,7 @@ def test_eval_main_val_test_and_guards(data_cfg, tmp_path, monkeypatch):
     data_cfg.eval.save_distances = False
     eval_module.main.__wrapped__(data_cfg)
     assert (tmp_path / "test/submission.csv").is_file()
+    assert not (tmp_path / "test/submission.csv").read_text().splitlines()[0].startswith("query_id")
     cand = pd.read_csv(tmp_path / "test/candidates.csv")
     assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
     assert not cand.empty
@@ -719,6 +721,7 @@ def test_eval_cli_force_add_and_data_root(data_cfg, tmp_path):
     assert str(written.data.val_source_csv) == str(Path(data_cfg.data.root) / "train.csv")
     assert not str(written.data.query_csv).startswith(old_root)
     assert (out / "submission.csv").is_file()
+    assert not (out / "submission.csv").read_text().splitlines()[0].startswith("query_id")
     cand = pd.read_csv(out / "candidates.csv")
     assert list(cand.columns) == ["query_id", "gallery_id", "confidence"]
 

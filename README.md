@@ -879,9 +879,10 @@ The evaluation directory contains:
   `image_id`. Local `eval.split=val` writes the same file over the held-out fold table instead.
 - `retrieval_embeddings.npy`: query and gallery embeddings after enabled expansion stages.
 - `distances.npy`: final query-to-gallery distance matrix, when enabled.
-- `submission.csv`: wide top-10 table `query_id,gallery_id_1,...,gallery_id_10`. One row per query
+- `submission.csv`: wide top-10 table `query_id,gallery_id_1,...,gallery_id_10`, **no header**. One row per query
   in CSV order, including open-set and refused queries. No `confidence` column. Empty cells and
-  skipped queries are invalid here; refusal is not expressed in this file.
+  skipped queries are invalid here; refusal is not expressed in this file. The demo gallery has 8
+  images, so the example file is 8 columns wide; a full gallery writes 10.
 - `candidates.csv`: contest accept/refuse file. Columns `query_id,gallery_id,confidence` in that
   order, header required. `confidence` is a monotone similarity score (higher = more confident);
   the range need not be `[0, 1]`. Organizers rank by this value and take the **max-confidence**

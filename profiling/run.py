@@ -256,13 +256,17 @@ def profile_extract(
     )
     reset_peak(device)
     latency = measure_latency(run_one, device, warmup=warmup, repeats=repeats)
-    throughput = measure_throughput(run_batch, device, batch_sizes=sizes, min_seconds=min_seconds)
-    cold_start = getattr(serving, "cold_start_s", None)
-    if callable(cold_start):
-        throughput["cold_start_s"] = cold_start()
-    release_runner(serving)
-    vram = measure_vram(run_batch, device, batch_sizes=sizes, repeats=vram_repeats)
-    release_runner(serving)
+    try:
+        throughput = measure_throughput(run_batch, device, batch_sizes=sizes, min_seconds=min_seconds)
+        cold_start = getattr(serving, "cold_start_s", None)
+        if callable(cold_start):
+            throughput["cold_start_s"] = cold_start()
+    finally:
+        release_runner(serving)
+    try:
+        vram = measure_vram(run_batch, device, batch_sizes=sizes, repeats=vram_repeats)
+    finally:
+        release_runner(serving)
     sample = min(8, len(paths))
     if cfg is None:
         first = run(sample)
