@@ -52,7 +52,7 @@ from profiling import (
 )
 from profiling import device as device_mod
 from profiling.extract import crop_record, decode_images, extract, preprocess_record
-from profiling.run import RepeatDataset, make_loader_runner
+from profiling.run import BatchStream, RepeatDataset, make_loader_runner
 from profiling.weights import is_contest_weight, is_extra_weight, iter_files
 
 
@@ -371,8 +371,11 @@ def test_loader_runner_streams_one_iterator(cfg, tmp_path, monkeypatch):
     assert len(cold) == 1
     assert cold[0]["batch_size"] == 1
     assert cold[0]["seconds"] >= 0
+    runner.release()
+    assert runner.cold_start_s()[0]["batch_size"] == 1
     with pytest.raises(ValueError, match="repeat dataset"):
         RepeatDataset([])
+    BatchStream(object()).close()
 
 
 def test_loader_runner_matches_embed_frame_context_tta(cfg, tmp_path, monkeypatch):
@@ -398,6 +401,118 @@ def test_loader_runner_matches_embed_frame_context_tta(cfg, tmp_path, monkeypatc
     expected = embed_frame(model, cfg, "cpu", frame)
     assert model.calls == 2
     assert np.max(np.abs(got - expected)) < 1e-5
+
+
+def test_loader_runner_releases_workers_between_batch_sizes(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
+    live = []
+
+    class Iterator:
+        def __init__(self, loader):
+            self.loader = loader
+            self.closed = False
+            live.append(self)
+
+        def __next__(self):
+            if self.closed:
+                raise RuntimeError("iterator already closed")
+            return {"image": torch.zeros(self.loader.batch_size, 3, 8, 8)}
+
+        def _shutdown_workers(self):
+            self.closed = True
+            live.remove(self)
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+            self.kwargs = kwargs
+
+        def __iter__(self):
+            return Iterator(self)
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 2
+    cfg.data.pin_memory = False
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 50]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    runner(1)
+    runner(1)
+    assert len(live) == 2
+    runner(8)
+    assert len(live) == 2
+    assert {item.loader.batch_size for item in live} == {8}
+    runner.release()
+    assert live == []
+
+
+def test_repeated_context_uses_the_same_images(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 4)
+    for index, path in enumerate(paths):
+        Image.new("RGB", (20, 16), (index * 40, 20, 80)).save(path, format="JPEG")
+    seen = []
+    original = VehicleDataset.__getitem__
+
+    def spy(self, index):
+        seen.append(int(index))
+        return original(self, index)
+
+    monkeypatch.setattr(VehicleDataset, "__getitem__", spy)
+    monkeypatch.setattr("modules.inference.build_transforms", lambda cfg: tiny_transform)
+    model = DummyReID()
+    model.eval()
+    cfg.data.num_workers = 0
+    cfg.data.pin_memory = False
+    cfg.data.context_pct = 0.0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = True
+    cfg.eval.tta.context_pcts = [0, 0]
+    cfg.eval.tta.scales = [1.0]
+    cfg.eval.tta.rotations = [0]
+    cfg.eval.tta.hflip = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, model, "cpu", cfg)
+    got = runner(2)
+    assert seen[:4] == [0, 1, 0, 1]
+    frame = records_frame(paths[:2], bboxes[:2])
+    expected = embed_frame(model, cfg, "cpu", frame)
+    assert np.max(np.abs(got - expected)) < 1e-5
+    cold = runner.cold_start_s()
+    assert [row["view"] for row in cold] == [0, 1]
+    assert [row["context_pct"] for row in cold] == [0.0, 0.0]
+
+
+def test_loader_runner_cold_start_skips_failed_open(cfg, tmp_path, monkeypatch):
+    paths, bboxes = records(tmp_path, 2)
+
+    class Iterator:
+        def __next__(self):
+            raise RuntimeError("worker failed")
+
+        def _shutdown_workers(self):
+            return None
+
+    class Loader:
+        def __init__(self, dataset, batch_size, **kwargs):
+            self.batch_size = batch_size
+
+        def __iter__(self):
+            return Iterator()
+
+    monkeypatch.setattr("profiling.run.DataLoader", Loader)
+    cfg.data.num_workers = 0
+    cfg.eval.precision = "fp32"
+    cfg.eval.tta.enabled = False
+    runner = make_loader_runner(paths, bboxes, tiny_transform, DummyReID(), "cpu", cfg)
+    with pytest.raises(RuntimeError, match="worker failed"):
+        runner(1)
+    assert runner.cold_start_s() == []
+    runner.release()
 
 
 def test_embed_tta_and_amp(monkeypatch):

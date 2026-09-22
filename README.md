@@ -920,10 +920,11 @@ numbers use TTA off, so they are unchanged.
 - `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
   and after every timed sample. This stays sequential `extract()` because that is the organizer
   one-vehicle cycle.
-- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32. One DataLoader iterator
-  keeps yielding batches for at least 10 seconds; the score counts images actually returned.
-  Worker startup is `cold_start_s`, outside that window. Context TTA uses the same
-  `embed_frame` average as Docker. The score uses the best FPS.
+- `throughput`: sustained images/s at batch sizes 1 / 8 / 16 / 32. Each size keeps one
+  DataLoader iterator yielding batches for at least 10 seconds, then that worker pool is
+  released before the next size. The score counts images actually returned. Worker startup
+  is `cold_start_s`, outside that window. Context TTA uses the same `embed_frame` average
+  as Docker, including a repeated context. The score uses the best FPS.
 - Also recorded: peak VRAM, weight-load time (reference), total weight-file bytes, two-run
   determinism. Stage bars are a separate diagnostic: they run after the same warmup as `latency_b1`,
   but each stage still synchronizes CUDA, so they must not be added up to explain the scored cycle.

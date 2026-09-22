@@ -1,5 +1,5 @@
 from time import perf_counter
-from typing import cast
+from typing import Any, cast
 
 from torch.utils.data import DataLoader, Dataset
 
@@ -71,7 +71,7 @@ class RepeatDataset(Dataset):
 
 
 class BatchStream:
-    def __init__(self, loader):
+    def __init__(self, loader: DataLoader):
         self.loader = loader
         self.iterator = None
         self.cold_s = None
@@ -79,20 +79,32 @@ class BatchStream:
     def next_batch(self):
         if self.iterator is None:
             started = perf_counter()
-            self.iterator = iter(self.loader)
+            self.iterator = iter(cast(Any, self.loader))
             batch = next(self.iterator)
             self.cold_s = perf_counter() - started
             return batch
         return next(self.iterator)
+
+    def close(self) -> None:
+        iterator = self.iterator
+        self.iterator = None
+        self.loader = None
+        if iterator is None:
+            return
+        shutdown = getattr(iterator, "_shutdown_workers", None)
+        if callable(shutdown):
+            shutdown()
 
 
 def make_loader_runner(paths, bboxes, transform, model, device, cfg, *, full_images=None):
     frame = records_frame(list(paths), list(bboxes), full_images=full_images)
     contexts = tta_context_pcts(cfg.eval.tta, cfg.data.context_pct)
     streams = {}
+    finished = []
+    active_size = None
 
-    def stream_for(size: int, context: float) -> BatchStream:
-        key = (int(size), float(context))
+    def stream_for(size: int, view: int, context: float) -> BatchStream:
+        key = (int(size), int(view))
         if key not in streams:
             base = VehicleDataset(frame, cfg, transform, context_pct=float(context))
             kwargs = inference_loader_kwargs(cfg, device)
@@ -100,11 +112,35 @@ def make_loader_runner(paths, bboxes, transform, model, device, cfg, *, full_ima
             streams[key] = BatchStream(loader)
         return streams[key]
 
+    def remember(size: int, view: int, context: float, stream: BatchStream) -> None:
+        if stream.cold_s is None:
+            return
+        finished.append(
+            {
+                "batch_size": int(size),
+                "view": int(view),
+                "context_pct": float(context),
+                "seconds": float(stream.cold_s),
+            }
+        )
+
     class Runner:
+        def _drop(self) -> None:
+            nonlocal active_size
+            for (size, view), stream in list(streams.items()):
+                remember(size, view, contexts[view], stream)
+                stream.close()
+            streams.clear()
+            active_size = None
+
         def __call__(self, size: int):
+            nonlocal active_size
+            if active_size != int(size):
+                self._drop()
+                active_size = int(size)
             views = []
-            for context in contexts:
-                batch = stream_for(size, context).next_batch()
+            for view, context in enumerate(contexts):
+                batch = stream_for(size, view, context).next_batch()
                 image = batch["image"].to(device, non_blocking=True)
                 views.append(
                     embed_tensor(
@@ -121,18 +157,30 @@ def make_loader_runner(paths, bboxes, transform, model, device, cfg, *, full_ima
             return fuse_context_views(views)
 
         def cold_start_s(self):
-            rows = []
-            for (size, context), stream in streams.items():
+            rows = list(finished)
+            for (size, view), stream in streams.items():
+                if stream.cold_s is None:
+                    continue
                 rows.append(
                     {
                         "batch_size": int(size),
-                        "context_pct": float(context),
+                        "view": int(view),
+                        "context_pct": float(contexts[view]),
                         "seconds": cast(float, stream.cold_s),
                     }
                 )
             return rows
 
+        def release(self) -> None:
+            self._drop()
+
     return Runner()
+
+
+def release_runner(runner) -> None:
+    release = getattr(runner, "release", None)
+    if callable(release):
+        release()
 
 
 def profile_extract(
@@ -212,7 +260,9 @@ def profile_extract(
     cold_start = getattr(serving, "cold_start_s", None)
     if callable(cold_start):
         throughput["cold_start_s"] = cold_start()
+    release_runner(serving)
     vram = measure_vram(run_batch, device, batch_sizes=sizes, repeats=vram_repeats)
+    release_runner(serving)
     sample = min(8, len(paths))
     if cfg is None:
         first = run(sample)
