@@ -116,7 +116,7 @@ def test_current_best_tuned_matches_eva02_oof():
     assert list(cfg.data.image_size) == [336, 336]
     assert list(cfg.eval.tta.scales) == [1.0]
     assert cfg.data.sampler.identities == 16
-    assert cfg.data.sampler.instances == 2
+    assert cfg.data.sampler.instances == 4
     assert cfg.scheduler.kind == "linear"
     assert list(cfg.scheduler.milestones) == [27, 28]
     assert cfg.eval.weights == "ema"
