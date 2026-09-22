@@ -1033,8 +1033,12 @@ F1/TNR.
 Contest F1 is query-level: TP only if the query has a gallery match **and** the highest-confidence
 candidate is that identity. Extra candidates below that top row do not change F1 or TNR. Wrong
 top-1 on a closed query is FP, not TP. TNR uses only queries with no gallery match. The contest
-operating-point score is `0.7 × F1 + 0.3 × TNR`. PR-AUC remains a threshold-free ranking of match vs
-no-match queries.
+operating-point score is `0.7 × F1 + 0.3 × TNR`. The PR-AUC column below is a threshold-free ranking
+of match vs no-match from each head's continuous OOF score (max cosine or CatBoost
+`P(match exists)`). It is not the score written into `candidates.csv`: serving stores
+`confidence = 1 − distance`, and CatBoost only decides which query rows appear. A local evaluator
+can still form a reference PR-AUC from those returned confidences (refusals as −inf); that curve is
+not the 0.965 figure.
 
 The operating points in `configs/refusal/` maximize the contest score `0.7 × F1 + 0.3 × TNR` on
 nested 5-fold inner CV of the labeled-only K=4 eval packs (cosine 0.7528, CatBoost 0.5473). They
@@ -1094,8 +1098,10 @@ Cosine 0.7528 stays the other preset. The AND row is not the Docker rule.*
 
 ![Outer-OOF precision-recall for match vs no-match](notebooks/eva02/readme_figs/refusal_pr.jpg)
 
-*Threshold-free ranking of “does a gallery match exist?” on labeled-only K=4 nested OOF. PR-AUC:
-cosine 0.956, CatBoost 0.965. Notebook: `notebooks/eva02/refusal_analysis.ipynb`.*
+*Threshold-free ranking of “does a gallery match exist?” on labeled-only K=4 nested OOF, using each
+head's continuous score (max cosine or CatBoost P), not `candidates.csv` confidence. PR-AUC:
+cosine 0.956, CatBoost 0.965. Serving writes `1 − distance` into that file; CatBoost only gates
+which rows appear. Notebook: `notebooks/eva02/refusal_analysis.ipynb`.*
 
 The 0.7528 cut is not ArcFace `m` or AdaSP `τ` read off the loss. The recipe trains ArcFace
 (`m = 0.479` rad ≈ 27.4°, `s = 35.1`) plus AdaSP (`τ = 0.026`, `1/τ ≈ 38.4`) on a PK 16×4 batch.
