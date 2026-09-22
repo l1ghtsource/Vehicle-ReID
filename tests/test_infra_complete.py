@@ -33,13 +33,13 @@ def test_docker_offline_image_pins_and_bakes_weights():
     assert "scripts/verify_weights.py --root /app/weights/finetuned" in dockerfile
     assert "checkpoint=/app/weights/finetuned/eva02.pt" in dockerfile
     assert "eval.top_k=10" in dockerfile
-    assert "refusal=eva02_threshold" in dockerfile
+    assert "refusal=eva02_model" in dockerfile
     assert "consul-tech" not in dockerfile
     assert "network_mode: none" in compose
     assert "gpus: all" in compose
     assert "./weights:/app/weights" not in compose
     assert "CHECKPOINT:-/app/weights/finetuned/eva02.pt" in compose
-    assert "refusal=eva02_threshold" in compose
+    assert "refusal=eva02_model" in compose
     assert "!weights/finetuned/" in dockerignore
     assert "extra_data" in dockerignore
     assert "filter=lfs" in gitattributes
