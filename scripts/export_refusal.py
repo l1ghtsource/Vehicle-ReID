@@ -26,7 +26,7 @@ from refusal import (
 from scripts.export_serving import source_checkpoint
 from scripts.verify_weights import write_sha256sums
 
-DEFAULT_CV = Path("runs/cv/eva02_k4")
+DEFAULT_CV = Path("runs/cv/eva02_k4_cam")
 DEFAULT_OUTPUT = Path("weights/finetuned/eva02_catboost.cbm")
 DEFAULT_NESTED_CONFIGS = (
     Path("configs/refusal/eva02_threshold.yaml"),

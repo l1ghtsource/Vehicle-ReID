@@ -1,9 +1,9 @@
-# EVA02 labeled-only K=4 nested 5-fold inner-CV mean contest (0.7 F1 + 0.3 TNR) max-cosine operating point.
+# EVA02 labeled-only K=4 camera-diverse nested 5-fold inner-CV mean contest (0.7 F1 + 0.3 TNR) max-cosine operating point.
 # Cosine preset. Docker serving uses eva02_model (CatBoost). Fit on 20% identity-hold-out eval packs, not 50/50 train pairs.
 # Contest F1/TNR are micro over the query set; organizers do not re-threshold confidence.
-# Including a query_id in candidates.csv is the accept decision (cosine >= 0.7528).
+# Including a query_id in candidates.csv is the accept decision (cosine >= 0.7868).
 kind: threshold
-cosine_threshold: 0.7528
+cosine_threshold: 0.7868
 model_path: null
 model_threshold: null
 rank_threshold: null

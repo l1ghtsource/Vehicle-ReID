@@ -1,0 +1,11 @@
+# @package _global_
+# Named alias for the serving recipe: PK 16×4 with camera-diverse sampling.
+# Same sampler as current_best_tuned. OOF: runs/cv/eva02_k4_cam.
+defaults:
+  - current_best_tuned
+  - _self_
+name: eva02_k4_cam
+data:
+  sampler:
+    instances: 4
+    camera_diverse: true

@@ -487,6 +487,7 @@ def test_eva02_multilevel_keeps_trial23_recipe():
         cfg = compose(config_name="config", overrides=["experiment=eva02_multilevel"])
         late = compose(config_name="config", overrides=["experiment=eva02_multilevel_late"])
         k4 = compose(config_name="config", overrides=["experiment=eva02_k4"])
+        k4_cam = compose(config_name="config", overrides=["experiment=eva02_k4_cam"])
     assert cfg.name == "eva02_multilevel"
     assert cfg.model.backend == "llm2clip"
     assert cfg.model.features_only is True
@@ -494,6 +495,7 @@ def test_eva02_multilevel_keeps_trial23_recipe():
     assert cfg.model.multilevel_fuse == "concat"
     assert cfg.model.head.local_parts == 0
     assert cfg.data.sampler.instances == 2
+    assert cfg.data.sampler.camera_diverse is False
     assert cfg.model.pooling.kind == tuned.model.pooling.kind
     assert cfg.train.epochs == tuned.train.epochs
     assert list(cfg.data.image_size) == [336, 336]
@@ -503,13 +505,19 @@ def test_eva02_multilevel_keeps_trial23_recipe():
     assert list(late.model.out_indices) == [20, 21, 22, 23]
     assert late.model.multilevel_fuse == "mean"
     assert late.data.sampler.instances == 2
+    assert late.data.sampler.camera_diverse is False
     assert late.train.epochs == tuned.train.epochs
     assert k4.name == "eva02_k4"
     assert k4.model.backend == "llm2clip"
     assert k4.model.features_only is False
     assert k4.data.sampler.identities == tuned.data.sampler.identities
     assert k4.data.sampler.instances == 4
+    assert k4.data.sampler.camera_diverse is False
     assert tuned.data.sampler.instances == 4
+    assert tuned.data.sampler.camera_diverse is True
+    assert k4_cam.name == "eva02_k4_cam"
+    assert k4_cam.data.sampler.instances == 4
+    assert k4_cam.data.sampler.camera_diverse is True
     assert k4.train.epochs == tuned.train.epochs
     assert k4.train.accumulate_grad_batches == tuned.train.accumulate_grad_batches
     assert list(k4.data.image_size) == [336, 336]

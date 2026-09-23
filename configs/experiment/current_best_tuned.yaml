@@ -1,7 +1,8 @@
 # @package _global_
 # LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe on original
-# labeled train only, except PK K=4 (16×4) instead of K=2.
-# Identity-disjoint 5-fold OOF (runs/cv/eva02_k4): mAP 0.855, mAP@10 0.844, Rank-1 0.849.
+# labeled train only: PK 16×4 and camera-diverse PK sampling.
+# Identity-disjoint 5-fold OOF (runs/cv/eva02_k4_cam): mAP 0.858, mAP@10 0.847, Rank-1 0.844.
+# Without camera_diverse (runs/cv/eva02_k4): 0.855 / 0.844 / 0.849. K=6 + cam did not beat this.
 # HDBSCAN test pseudo-labels were tried (runs/cv/pseudo_iter001_mcs4) and are not used.
 # Junk = same vehicle and camera.
 # Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
@@ -21,7 +22,7 @@ data:
     kind: pk
     identities: 16
     instances: 4
-    camera_diverse: false
+    camera_diverse: true
 train:
   epochs: 27
   accumulate_grad_batches: 4

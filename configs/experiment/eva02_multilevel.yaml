@@ -8,6 +8,7 @@ name: eva02_multilevel
 data:
   sampler:
     instances: 2
+    camera_diverse: false
 model:
   features_only: true
   out_indices: [11, 17, 23]
