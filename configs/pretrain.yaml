@@ -17,3 +17,5 @@ pretrain:
     root: extra_data/VRIC
   madcars:
     root: extra_data/madcars
+  madcars_full:
+    root: extra_data/madcars

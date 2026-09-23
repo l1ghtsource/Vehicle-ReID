@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -65,9 +66,9 @@ def read_vric(root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def read_madcars(root: Path) -> pd.DataFrame:
+def read_madcars(root: Path, subsample: str = "subsample.csv") -> pd.DataFrame:
     image_dir = root / "images"
-    meta_path = root / "meta" / "subsample.csv"
+    meta_path = root / "meta" / subsample
     if not image_dir.is_dir() or not meta_path.is_file():
         raise FileNotFoundError(f"Incomplete MAD-Cars dataset at {root}")
     meta = pd.read_csv(meta_path, usecols=["car_id", "view_id"]).drop_duplicates(
@@ -91,7 +92,12 @@ def read_madcars(root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-READERS = {"veri": read_veri, "vric": read_vric, "madcars": read_madcars}
+READERS = {
+    "veri": read_veri,
+    "vric": read_vric,
+    "madcars": read_madcars,
+    "madcars_full": partial(read_madcars, subsample="subsample20.csv"),
+}
 
 SSL_CROP = "test_train_ssl_crop"
 SSL_FULL = "test_train_ssl_full"

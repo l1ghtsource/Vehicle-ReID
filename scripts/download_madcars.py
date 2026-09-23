@@ -20,25 +20,32 @@ from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
 META = ROOT / "extra_data/madcars/meta/mad.csv"
-SUBSAMPLE = ROOT / "extra_data/madcars/meta/subsample.csv"
-OUT = ROOT / "extra_data/madcars/images"
+
+
+def paths_for(out_name: str, subsample_name: str):
+    out = ROOT / "extra_data" / out_name
+    return out / "meta" / subsample_name, out / "images"
 
 
 def even_indices(n: int, target: int) -> list[int]:
     return sorted(np.unique(np.linspace(0, n - 1, min(target, n)).astype(int)).tolist())
 
 
-def build_subsample(cars: int, views: int, min_views: int, seed: int) -> pd.DataFrame:
+def build_subsample(cars: int, views: int, min_views: int, seed: int, subsample_path: Path) -> pd.DataFrame:
     df = pd.read_csv(META, usecols=["car_id", "view_id", "url", "brand", "model"])
     counts = df.groupby("car_id").size()
     eligible = counts[counts >= min_views].index
-    rng = pd.Series(eligible).sample(n=min(cars, len(eligible)), random_state=seed).tolist()
+    if cars <= 0 or cars >= len(eligible):
+        picked = sorted(eligible.tolist())
+    else:
+        picked = pd.Series(eligible).sample(n=cars, random_state=seed).tolist()
     parts = []
-    for car_id in rng:
+    for car_id in picked:
         rows = df[df.car_id == car_id].sort_values("view_id")
         parts.append(rows.iloc[even_indices(len(rows), views)])
     sub = pd.concat(parts, ignore_index=True)
-    sub.to_csv(SUBSAMPLE, index=False)
+    subsample_path.parent.mkdir(parents=True, exist_ok=True)
+    sub.to_csv(subsample_path, index=False)
     return sub
 
 
@@ -93,16 +100,27 @@ async def worker(session, queue, stats, max_side, t0, total):
 
 async def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--cars", type=int, default=20000)
+    p.add_argument("--cars", type=int, default=20000, help="0 = all eligible cars")
     p.add_argument("--views", type=int, default=10)
     p.add_argument("--min-views", type=int, default=4)
     p.add_argument("--max-side", type=int, default=768)
     p.add_argument("--concurrency", type=int, default=64)
     p.add_argument("--shard", type=int, default=0)
     p.add_argument("--num-shards", type=int, default=1)
+    p.add_argument("--dataset", default="madcars", help="extra_data/<dataset> output dir")
+    p.add_argument("--subsample-name", default="subsample.csv")
+    p.add_argument("--prepare-only", action="store_true", help="only (re)build the subsample csv and exit")
     args = p.parse_args()
 
-    sub = build_subsample(args.cars, args.views, args.min_views, seed=42)
+    subsample_path, out = paths_for(args.dataset, args.subsample_name)
+    if subsample_path.exists() and not args.prepare_only:
+        sub = pd.read_csv(subsample_path)
+        print(f"reusing existing {subsample_path} ({len(sub)} images, {sub.car_id.nunique()} cars)", flush=True)
+    else:
+        sub = build_subsample(args.cars, args.views, args.min_views, seed=42, subsample_path=subsample_path)
+        print(f"subsample written: {len(sub)} images, {sub.car_id.nunique()} cars", flush=True)
+    if args.prepare_only:
+        return
     if args.num_shards > 1:
         sub = sub[sub.car_id % args.num_shards == args.shard]
     print(f"subsample: {len(sub)} images, {sub.car_id.nunique()} cars (shard {args.shard}/{args.num_shards})", flush=True)
@@ -114,7 +132,7 @@ async def main() -> None:
     async with aiohttp.ClientSession(connector=connector) as session:
         workers = [asyncio.create_task(worker(session, queue, stats, args.max_side, t0, len(sub))) for _ in range(args.concurrency)]
         for row in sub.itertuples():
-            path = OUT / str(row.car_id) / f"{row.view_id}.jpg"
+            path = out / str(row.car_id) / f"{row.view_id}.jpg"
             queue.put_nowait((row.url, path))
         for _ in workers:
             queue.put_nowait(None)
