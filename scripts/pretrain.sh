@@ -37,7 +37,7 @@ fi
 IFS=',' read -r -a DATASET_LIST <<< "$DATASETS"
 for dataset in "${DATASET_LIST[@]}"; do
   case "$dataset" in
-    veri|vric|test_train_ssl|test_train_ssl_crop|test_train_ssl_full) ;;
+    veri|vric|madcars|test_train_ssl|test_train_ssl_crop|test_train_ssl_full) ;;
     *)
       echo "unknown dataset: $dataset" >&2
       usage

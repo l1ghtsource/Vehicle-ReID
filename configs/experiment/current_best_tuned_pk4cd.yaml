@@ -1,0 +1,361 @@
+# @package _global_
+# LLM2CLIP EVA02-L-14-336 with the convnext_base_all trial 23 recipe on original
+# labeled train only. Identity-disjoint 5-fold OOF mAP 0.847, mAP@10 0.834, Rank-1 0.842.
+# HDBSCAN test pseudo-labels were tried (runs/cv/pseudo_iter001_mcs4) and are not used.
+# Junk = same vehicle and camera.
+# Image size 336 and local_parts=0 are required for this backbone; other knobs stay overridable.
+defaults:
+  - override /model: llm2clip
+  - override /loss: arcface_adasp
+  - override /optimizer: adamw
+name: current_best_tuned_pk4cd
+data:
+  context_pct: 6.201741080661072
+  context_jitter_pct: 8.594371961218801
+  resize_mode: stretch
+  image_size:
+  - 336
+  - 336
+  sampler:
+    kind: pk
+    identities: 16
+    instances: 4
+    camera_diverse: true
+train:
+  epochs: 27
+  accumulate_grad_batches: 4
+  gradient_clip_val: 4.373365182485516
+  freeze_backbone_epochs: 0
+  backbone_lr_multiplier: 0.05017559967954163
+  layer_decay: 0.8934696293536177
+  no_weight_decay_bias_norm: true
+  rdrop:
+    enabled: false
+    weight: 0.39436527364130586
+    temperature: 1.2986365329947283
+  awp:
+    enabled: false
+    start_epoch: 5
+    lr: 0.08597429671280962
+    eps: 0.0008426688228023555
+    weight: 0.2495768833990789
+    parameter_pattern: weight
+  ema:
+    enabled: true
+    decay: 0.9406090932120481
+    validate: true
+model:
+  drop_path_rate: 0.08475853663214046
+  pooling:
+    kind: attn
+    p: 5.287033376337234
+    trainable: true
+    attention_hidden: 128
+  head:
+    embedding_dim: 256
+    bnneck: true
+    dropout: 0.22222483845111796
+    retrieval_feature: neck
+    local_parts: 0
+loss:
+  terms:
+  - name: arcface
+    weight: 0.37821025890229204
+    feature: neck
+    params:
+      margin: 0.4789452160852028
+      scale: 35.05004134475763
+  - name: adasp
+    weight: 2.8262507466706026
+    feature: neck
+    params:
+      temp: 0.026071235242105424
+      loss_type: adasp
+optimizer:
+  lr: 0.0006983608478082421
+  weight_decay: 0.0006624568785150743
+  betas:
+  - 0.9497925039154058
+  - 0.9983205225232131
+  eps: 3.424080697950365e-08
+scheduler:
+  kind: linear
+  warmup_epochs: 2
+  warmup_start_factor: 0.0003731205562294547
+  min_lr_ratio: 0.1085248671301968
+  milestones:
+  - 27
+  - 28
+  gamma: 0.5963261708933612
+augmentation:
+  transforms:
+  - name: HorizontalFlip
+    enabled: true
+    p: 0.5869859024676515
+    params: {}
+  - name: RandomResizedCrop
+    enabled: true
+    p: 0.4150274900267666
+    params:
+      scale:
+      - 0.70261352737439
+      - 0.987078359372607
+      ratio:
+      - 0.6767987963625058
+      - 1.1282978787747608
+  - name: Affine
+    enabled: true
+    p: 0.0033763109698118354
+    params:
+      scale:
+      - 0.8996512550512515
+      - 1.1258703582757752
+      translate_percent:
+      - -0.12035438886428294
+      - 0.08357313585678727
+      rotate:
+      - -7
+      - 8
+      shear:
+      - -4
+      - 1
+      border_mode: 0
+  - name: Perspective
+    enabled: false
+    p: 0.13870556416089042
+    params:
+      scale:
+      - 0.023845274780649253
+      - 0.06066381971704802
+  - name: ColorJitter
+    enabled: true
+    p: 0.0193238042935564
+    params:
+      brightness: 0.20740473699841983
+      contrast: 0.10959266062393287
+      saturation: 0.1066146842792301
+      hue: 0.01635726332321259
+  - name: RandomBrightnessContrast
+    enabled: false
+    p: 0.4289618791577184
+    params:
+      brightness_limit: 0.18515594183989406
+      contrast_limit: 0.24987441215228692
+  - name: RandomGamma
+    enabled: true
+    p: 0.33831981760388136
+    params:
+      gamma_limit:
+      - 65
+      - 110
+  - name: HueSaturationValue
+    enabled: false
+    p: 0.20386634416013494
+    params:
+      hue_shift_limit: 5
+      sat_shift_limit: 19
+      val_shift_limit: 17
+  - name: RGBShift
+    enabled: false
+    p: 0.11017993352755212
+    params:
+      r_shift_limit: 9
+      g_shift_limit: 2
+      b_shift_limit: 14
+  - name: CLAHE
+    enabled: false
+    p: 0.5968883051368903
+    params:
+      clip_limit:
+      - 1.009522893585583
+      - 3.3727415037419024
+  - name: ToGray
+    enabled: true
+    p: 0.15069041857112908
+    params:
+      num_output_channels: 3
+  - name: ChannelShuffle
+    enabled: false
+    p: 0.3049346267447689
+    params: {}
+  - name: ImageCompression
+    enabled: true
+    p: 0.000662542258118598
+    params:
+      quality_range:
+      - 24
+      - 89
+  - name: Downscale
+    enabled: true
+    p: 0.13942997621641523
+    params:
+      scale_range:
+      - 0.3687657476906598
+      - 0.7554524624916238
+  - name: GaussianBlur
+    enabled: true
+    p: 0.15597190476033926
+    params:
+      blur_limit:
+      - 3
+      - 7
+  - name: MotionBlur
+    enabled: true
+    p: 0.151728525348705
+    params:
+      blur_limit:
+      - 3
+      - 5
+  - name: Defocus
+    enabled: false
+    p: 0.366261810114573
+    params:
+      radius:
+      - 2
+      - 5
+      alias_blur:
+      - 0.11921352120518627
+      - 0.4438590619478583
+  - name: GaussNoise
+    enabled: false
+    p: 0.28150633516551704
+    params:
+      std_range:
+      - 0.022045815637243556
+      - 0.06474391211341668
+  - name: ISONoise
+    enabled: false
+    p: 0.01032506893850366
+    params:
+      intensity:
+      - 0.08467001791710009
+      - 0.5101404546567807
+  - name: MultiplicativeNoise
+    enabled: false
+    p: 0.4371090934994113
+    params:
+      multiplier:
+      - 0.9062280248710636
+      - 1.1899429646127488
+  - name: RandomFog
+    enabled: true
+    p: 0.5350381955931681
+    params:
+      fog_coef_range:
+      - 0.04611427055174449
+      - 0.40824813221200856
+  - name: RandomRain
+    enabled: false
+    p: 0.26680523166773784
+    params:
+      rain_type: drizzle
+      blur_value: 7
+  - name: RandomSnow
+    enabled: false
+    p: 0.18677316909954977
+    params:
+      snow_point_range:
+      - 0.048792395402570514
+      - 0.16471300663109686
+      brightness_coeff: 1.4592705616905393
+  - name: RandomShadow
+    enabled: false
+    p: 0.16271635415234523
+    params:
+      num_shadows_limit:
+      - 1
+      - 3
+      shadow_dimension: 4
+  - name: RandomSunFlare
+    enabled: false
+    p: 0.16858249399496625
+    params:
+      src_radius: 130
+  - name: Sharpen
+    enabled: false
+    p: 0.4223552232762185
+    params:
+      alpha:
+      - 0.1591653105099996
+      - 0.4219957195700494
+  - name: CoarseDropout
+    enabled: true
+    p: 0.1592607396501106
+    params:
+      num_holes_range:
+      - 1
+      - 4
+      hole_height_range:
+      - 0.05205195406178583
+      - 0.2009000422401377
+      hole_width_range:
+      - 0.0498825212511011
+      - 0.16548516262179255
+      fill: random_uniform
+  - name: RandomErasing
+    enabled: true
+    p: 0.21640945857492921
+    params:
+      scale:
+      - 0.050448027891721384
+      - 0.17488171814921796
+      ratio:
+      - 0.10017004231459144
+      - 3.7279882926641195
+      value: random
+  - name: GridDropout
+    enabled: false
+    p: 0.26499314993672585
+    params:
+      ratio: 0.28885907017308166
+  - name: PatchShuffle
+    enabled: false
+    p: 0.35260853965397543
+    params:
+      grid: 3
+  - name: AugMix
+    enabled: false
+    p: 0.007809774676340595
+    params:
+      severity: 3
+  - name: RandAugment
+    enabled: false
+    p: 0.011127759816182754
+    params:
+      num_ops: 2
+      magnitude: 7
+eval:
+  weights: ema
+  tta:
+    enabled: false
+    hflip: true
+    scales:
+    - 1.0
+    rotations:
+    - -4
+    - 0
+    - 4
+    context_pcts:
+    - 0.0
+    - 4.972099731465896
+postproc:
+  # Contest serving is streaming: gallery may be prebuilt, each query is independent.
+  # AQE and query-query rerank stay off; they were measured on OOF only.
+  enabled: false
+  streaming: true
+  aqe:
+    enabled: false
+    k: 17
+    alpha: 3.2901389874171656
+    iterations: 1
+    gallery_only: true
+  gallery_aggregation:
+    enabled: false
+    k: 1
+    alpha: 0.9650954315703635
+    min_similarity: 0.7419178426762826
+  rerank:
+    kind: gnn
+    k1: 22
+    k2: 11
+    lambda_value: 0.23238988084901938

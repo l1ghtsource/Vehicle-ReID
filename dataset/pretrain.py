@@ -65,7 +65,34 @@ def read_vric(root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-READERS = {"veri": read_veri, "vric": read_vric}
+def read_madcars(root: Path) -> pd.DataFrame:
+    image_dir = root / "images"
+    meta_path = root / "meta" / "subsample.csv"
+    if not image_dir.is_dir() or not meta_path.is_file():
+        raise FileNotFoundError(f"Incomplete MAD-Cars dataset at {root}")
+    meta = pd.read_csv(meta_path, usecols=["car_id", "view_id"]).drop_duplicates(
+        subset=["car_id", "view_id"]
+    )
+    rows = []
+    for car_id, view_id in zip(meta.car_id, meta.view_id):
+        name = f"{view_id}.jpg"
+        rows.append(
+            {
+                "image_id": f"madcars:{car_id}_{view_id}",
+                "image_path": str((image_dir / str(car_id) / name).resolve()),
+                "identity_key": f"madcars:{car_id}",
+                "camera_key": f"madcars:v{view_id}",
+                "full_image": True,
+                "source": "madcars",
+            }
+        )
+    if not rows:
+        raise ValueError(f"MAD-Cars annotations are empty: {meta_path}")
+    return pd.DataFrame(rows)
+
+
+READERS = {"veri": read_veri, "vric": read_vric, "madcars": read_madcars}
+
 SSL_CROP = "test_train_ssl_crop"
 SSL_FULL = "test_train_ssl_full"
 SSL_SOURCE = "test_train_ssl"
