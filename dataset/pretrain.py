@@ -80,7 +80,7 @@ def read_madcars(root: Path, subsample: str = "subsample.csv") -> pd.DataFrame:
         rows.append(
             {
                 "image_id": f"madcars:{car_id}_{view_id}",
-                "image_path": str((image_dir / str(car_id) / name).resolve()),
+                "image_path": str(image_dir / str(car_id) / name),
                 "identity_key": f"madcars:{car_id}",
                 "camera_key": f"madcars:v{view_id}",
                 "full_image": True,
@@ -178,11 +178,13 @@ class PretrainDataModule(ReIDDataModule):
         self.validation_frame: pd.DataFrame | None = None
 
     def prepare_data(self):
-        load_external_data(self.cfg)
+        self.external_frame = load_external_data(self.cfg)
         read_annotations(self.cfg.pretrain.validation_csv, labeled=True)
 
     def setup(self, stage=None):
-        train = load_external_data(self.cfg)
+        train = self.external_frame
+        if train is None:
+            train = load_external_data(self.cfg)
         validation = read_annotations(self.cfg.pretrain.validation_csv, labeled=True)
         self.external_frame = train
         self.validation_frame = validation
