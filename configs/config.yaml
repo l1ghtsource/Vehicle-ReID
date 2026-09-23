@@ -95,7 +95,8 @@ checkpointing:
   monitor: val/mAP
   mode: max
   save_top_k: 2
-  save_last: true
+  save_last: false
+  last_every_n_epochs: 5
 eval:
   split: val
   weights: auto

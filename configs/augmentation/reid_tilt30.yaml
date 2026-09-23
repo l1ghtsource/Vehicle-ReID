@@ -1,0 +1,33 @@
+transforms:
+  - {name: HorizontalFlip, enabled: true, p: 0.5, params: {}}
+  - {name: RandomResizedCrop, enabled: true, p: 0.3, params: {scale: [0.8, 1.0], ratio: [0.85, 1.18]}}
+  - {name: Affine, enabled: true, p: 0.3, params: {scale: [0.9, 1.1], translate_percent: [-0.05, 0.05], rotate: [-6, 6], shear: {x: [-2, 2], y: [-12, -4]}, border_mode: 0}}
+  - {name: Perspective, enabled: true, p: 0.15, params: {scale: [0.02, 0.06]}}
+  - {name: ColorJitter, enabled: true, p: 0.5, params: {brightness: 0.2, contrast: 0.2, saturation: 0.15, hue: 0.03}}
+  - {name: RandomBrightnessContrast, enabled: false, p: 0.3, params: {brightness_limit: 0.2, contrast_limit: 0.2}}
+  - {name: RandomGamma, enabled: true, p: 0.25, params: {gamma_limit: [70, 140]}}
+  - {name: HueSaturationValue, enabled: false, p: 0.2, params: {hue_shift_limit: 5, sat_shift_limit: 15, val_shift_limit: 15}}
+  - {name: RGBShift, enabled: false, p: 0.2, params: {r_shift_limit: 10, g_shift_limit: 10, b_shift_limit: 10}}
+  - {name: CLAHE, enabled: false, p: 0.15, params: {clip_limit: [1, 3]}}
+  - {name: ToGray, enabled: true, p: 0.05, params: {num_output_channels: 3}}
+  - {name: ChannelShuffle, enabled: false, p: 0.05, params: {}}
+  - {name: ImageCompression, enabled: true, p: 0.3, params: {quality_range: [35, 95]}}
+  - {name: Downscale, enabled: true, p: 0.15, params: {scale_range: [0.4, 0.85]}}
+  - {name: GaussianBlur, enabled: true, p: 0.15, params: {blur_limit: [3, 7]}}
+  - {name: MotionBlur, enabled: true, p: 0.15, params: {blur_limit: [3, 9]}}
+  - {name: Defocus, enabled: false, p: 0.1, params: {radius: [2, 5], alias_blur: [0.1, 0.5]}}
+  - {name: GaussNoise, enabled: true, p: 0.15, params: {std_range: [0.01, 0.05]}}
+  - {name: ISONoise, enabled: false, p: 0.1, params: {intensity: [0.1, 0.3]}}
+  - {name: MultiplicativeNoise, enabled: false, p: 0.1, params: {multiplier: [0.9, 1.1]}}
+  - {name: RandomFog, enabled: false, p: 0.1, params: {fog_coef_range: [0.05, 0.25]}}
+  - {name: RandomRain, enabled: false, p: 0.1, params: {rain_type: drizzle, blur_value: 3}}
+  - {name: RandomSnow, enabled: false, p: 0.1, params: {snow_point_range: [0.05, 0.15], brightness_coeff: 1.2}}
+  - {name: RandomShadow, enabled: false, p: 0.15, params: {num_shadows_limit: [1, 2], shadow_dimension: 4}}
+  - {name: RandomSunFlare, enabled: false, p: 0.05, params: {src_radius: 60}}
+  - {name: Sharpen, enabled: false, p: 0.1, params: {alpha: [0.1, 0.3]}}
+  - {name: CoarseDropout, enabled: true, p: 0.25, params: {num_holes_range: [1, 4], hole_height_range: [0.05, 0.18], hole_width_range: [0.05, 0.18], fill: random_uniform}}
+  - {name: RandomErasing, enabled: true, p: 0.25, params: {scale: [0.02, 0.2], ratio: [0.3, 3.3], value: random}}
+  - {name: GridDropout, enabled: false, p: 0.1, params: {ratio: 0.25}}
+  - {name: PatchShuffle, enabled: false, p: 0.1, params: {grid: 2}}
+  - {name: AugMix, enabled: false, p: 0.2, params: {severity: 3}}
+  - {name: RandAugment, enabled: false, p: 0.2, params: {num_ops: 2, magnitude: 7}}
