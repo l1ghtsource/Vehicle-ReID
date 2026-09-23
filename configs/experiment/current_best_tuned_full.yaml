@@ -6,7 +6,7 @@ defaults:
   - override /model: llm2clip
   - override /loss: arcface_adasp
   - override /optimizer: adamw
-  - override /augmentation: reid_tilt30
+  - override /augmentation: reid_tilt
 name: current_best_tuned_full
 data:
   context_pct: 6.201741080661072
