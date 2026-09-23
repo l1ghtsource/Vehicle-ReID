@@ -34,5 +34,5 @@ for fold in $FOLDS; do
 done
 
 .venv/bin/python scripts/aggregate_cv.py \
-  "$RUN_ROOT"/fold{0,1,2,3,4}/val/metrics.json \
+  $(for f in $FOLDS; do echo "$RUN_ROOT/fold$f/val/metrics.json"; done) \
   --output "$RUN_ROOT/cv_metrics.json"
