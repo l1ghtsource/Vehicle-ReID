@@ -1,0 +1,11 @@
+# @package _global_
+# Finished K=4 CV without camera-diverse sampling (runs/cv/eva02_k4).
+# Serving moved to camera_diverse=true; see current_best_tuned / eva02_k4_cam.
+defaults:
+  - current_best_tuned
+  - _self_
+name: eva02_k4
+data:
+  sampler:
+    instances: 4
+    camera_diverse: false

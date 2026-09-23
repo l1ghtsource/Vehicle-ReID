@@ -1,0 +1,14 @@
+# @package _global_
+# Finished run on the K=2 trial23 recipe. EVA02-L returns blocks 12, 18, and 24.
+# The last block is LayerNormed like the single-level path. Earlier blocks stay raw.
+defaults:
+  - current_best_tuned
+  - _self_
+name: eva02_multilevel
+data:
+  sampler:
+    instances: 2
+    camera_diverse: false
+model:
+  features_only: true
+  out_indices: [11, 17, 23]

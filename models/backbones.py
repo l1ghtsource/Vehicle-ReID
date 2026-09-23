@@ -21,6 +21,56 @@ from .kernels import attn_kernel_name, patch_eva_attention
 TOKEN_MASK_BACKENDS = frozenset({"llm2clip"})
 
 
+def llm2clip_level_indices(out_indices, depth: int) -> list[int]:
+    if out_indices is None or len(list(out_indices)) == 0:
+        raise ValueError("llm2clip multi-level features require model.out_indices")
+    resolved: list[int] = []
+    for raw in out_indices:
+        index = int(raw)
+        if index < 0:
+            index += depth
+        if index < 0 or index >= depth:
+            raise ValueError(f"llm2clip out_indices entry {raw} is outside 0..{depth - 1}")
+        resolved.append(index)
+    if len(set(resolved)) != len(resolved):
+        raise ValueError("llm2clip out_indices must be unique")
+    return resolved
+
+
+def llm2clip_fuse_name(cfg) -> str:
+    raw = cfg.get("multilevel_fuse") if hasattr(cfg, "get") else getattr(cfg, "multilevel_fuse", None)
+    name = "concat" if raw is None else str(raw).strip().lower()
+    if name not in {"concat", "mean"}:
+        raise ValueError("llm2clip multilevel_fuse must be concat/mean")
+    return name
+
+
+def llm2clip_levels(net, x, mask, indices: list[int], fuse: str):
+    captured: dict[int, torch.Tensor] = {}
+    hooks = []
+    for index in set(indices):
+
+        def keep(_module, _inputs, output, index=index):
+            captured[index] = output
+
+        hooks.append(net.blocks[index].register_forward_hook(keep))
+    try:
+        net.forward_features(x, return_all_features=True, bool_masked_pos=mask)
+    finally:
+        for hook in hooks:
+            hook.remove()
+    depth = len(net.blocks)
+    levels = []
+    for index in indices:
+        tokens = captured[index]
+        if fuse == "mean" or index == depth - 1:
+            tokens = net.norm(tokens)
+        levels.append(tokens)
+    if fuse == "mean":
+        return [torch.stack(levels).mean(0)]
+    return levels
+
+
 def container_dict(value: Any) -> dict[str, Any]:
     container = OmegaConf.to_container(value, resolve=True)
     if not isinstance(container, dict):
@@ -42,6 +92,8 @@ class Backbone(nn.Module):
     def __init__(self, cfg, image_size, initialize_pretrained=True):
         super().__init__()
         self.net: Any
+        self.level_indices: list[int] | None = None
+        self.level_fuse = "concat"
         self.cfg, self.backend = cfg, cfg.backend
         self.prefix = cfg.num_prefix_tokens
         self.layout = cfg.layout
@@ -147,7 +199,13 @@ class Backbone(nn.Module):
                 grad_checkpointing=cfg.gradient_checkpointing,
                 **kw,
             )
-            self.dims = [1024]
+            if bool(cfg.features_only):
+                self.level_indices = llm2clip_level_indices(cfg.out_indices, len(self.net.blocks))
+                self.level_fuse = llm2clip_fuse_name(cfg)
+                width = int(self.net.embed_dim)
+                self.dims = [width] if self.level_fuse == "mean" else [width] * len(self.level_indices)
+            else:
+                self.dims = [1024]
             if pretrained:
                 path = cfg.checkpoint_path
                 if not path:
@@ -192,8 +250,11 @@ class Backbone(nn.Module):
         elif self.backend == "radio":
             _, out = self.net(x)
         elif self.backend == "llm2clip":
-            tokens = self.net.forward_features(x, return_all_features=True, bool_masked_pos=mask)
-            out = self.net.norm(tokens)
+            if self.level_indices is None:
+                tokens = self.net.forward_features(x, return_all_features=True, bool_masked_pos=mask)
+                out = self.net.norm(tokens)
+            else:
+                out = llm2clip_levels(self.net, x, mask, self.level_indices, self.level_fuse)
         else:
             out = self.net(x)
         out = list(out) if isinstance(out, (list, tuple)) else [out]

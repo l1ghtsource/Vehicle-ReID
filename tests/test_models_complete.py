@@ -4,7 +4,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, open_dict
 from torch import nn
 
 import models.backbones as backbones
@@ -236,6 +236,7 @@ def test_llm_custom_unknown_and_forward_guards(cfg, tmp_path, monkeypatch):
     )
     cfg.model.backend = "llm2clip"
     cfg.model.pretrained = True
+    cfg.model.features_only = False
     cfg.model.checkpoint_path = None
     with pytest.raises(ValueError, match="336"):
         Backbone(cfg.model, [64, 64])
@@ -418,6 +419,108 @@ def test_swin_config_aligns_with_data_size():
     assert cfg.model.spatial_multiple == 32
     assert cfg.model.bind_image_size is True
     assert cfg.model.kwargs.strict_img_size is False
+
+
+def test_llm2clip_multilevel_uses_selected_blocks(cfg, monkeypatch):
+    def factory(**kwargs):
+        return EVAVisionTransformer(
+            img_size=28,
+            patch_size=14,
+            embed_dim=32,
+            depth=4,
+            num_heads=2,
+            mlp_ratio=2.0,
+            qkv_bias=True,
+            num_classes=0,
+            use_mean_pooling=False,
+            rope=False,
+        )
+
+    monkeypatch.setattr(backbones, "EVAVisionTransformer", factory)
+    cfg.model.backend = "llm2clip"
+    cfg.model.pretrained = False
+    cfg.model.features_only = True
+    cfg.model.out_indices = [1, -1]
+    model = Backbone(cfg.model, [336, 336])
+    assert model.level_indices == [1, 3]
+    assert model.dims == [32, 32]
+    images = torch.randn(2, 3, 28, 28)
+    levels = model(images)
+    assert len(levels) == 2
+    final = model.net.norm(model.net.forward_features(images, return_all_features=True))
+    torch.testing.assert_close(levels[1], final)
+    assert not torch.equal(levels[0], levels[1])
+    mask = torch.zeros(2, 4, dtype=torch.bool)
+    mask[0, 0] = True
+    masked = model(images, mask=mask)
+    assert not torch.equal(masked[0], levels[0])
+    with pytest.raises(ValueError, match="require"):
+        backbones.llm2clip_level_indices(None, 4)
+    with pytest.raises(ValueError, match="require"):
+        backbones.llm2clip_level_indices([], 4)
+    with pytest.raises(ValueError, match="outside"):
+        backbones.llm2clip_level_indices([4], 4)
+    with pytest.raises(ValueError, match="unique"):
+        backbones.llm2clip_level_indices([1, -3], 4)
+    with open_dict(cfg.model):
+        cfg.model.multilevel_fuse = "mean"
+    averaged = Backbone(cfg.model, [336, 336])
+    assert averaged.dims == [32]
+    mean_levels = averaged(images)
+    assert len(mean_levels) == 1
+    concat = backbones.llm2clip_levels(averaged.net, images, None, [1, 3], "concat")
+    torch.testing.assert_close(mean_levels[0], torch.stack([averaged.net.norm(concat[0]), concat[1]]).mean(0))
+    with open_dict(cfg.model):
+        cfg.model.multilevel_fuse = "stack"
+    with pytest.raises(ValueError, match="concat/mean"):
+        Backbone(cfg.model, [336, 336])
+    assert backbones.llm2clip_fuse_name(SimpleNamespace()) == "concat"
+    assert backbones.llm2clip_fuse_name(SimpleNamespace(multilevel_fuse="mean")) == "mean"
+
+
+def test_eva02_multilevel_keeps_trial23_recipe():
+    with initialize_config_dir(
+        version_base="1.3",
+        config_dir=str(Path(__file__).resolve().parents[1] / "configs"),
+    ):
+        tuned = compose(config_name="config", overrides=["experiment=current_best_tuned"])
+        cfg = compose(config_name="config", overrides=["experiment=eva02_multilevel"])
+        late = compose(config_name="config", overrides=["experiment=eva02_multilevel_late"])
+        k4 = compose(config_name="config", overrides=["experiment=eva02_k4"])
+        k4_cam = compose(config_name="config", overrides=["experiment=eva02_k4_cam"])
+    assert cfg.name == "eva02_multilevel"
+    assert cfg.model.backend == "llm2clip"
+    assert cfg.model.features_only is True
+    assert list(cfg.model.out_indices) == [11, 17, 23]
+    assert cfg.model.multilevel_fuse == "concat"
+    assert cfg.model.head.local_parts == 0
+    assert cfg.data.sampler.instances == 2
+    assert cfg.data.sampler.camera_diverse is False
+    assert cfg.model.pooling.kind == tuned.model.pooling.kind
+    assert cfg.train.epochs == tuned.train.epochs
+    assert list(cfg.data.image_size) == [336, 336]
+    assert cfg.eval.weights == "ema"
+    assert tuned.model.features_only is False
+    assert late.name == "eva02_multilevel_late"
+    assert list(late.model.out_indices) == [20, 21, 22, 23]
+    assert late.model.multilevel_fuse == "mean"
+    assert late.data.sampler.instances == 2
+    assert late.data.sampler.camera_diverse is False
+    assert late.train.epochs == tuned.train.epochs
+    assert k4.name == "eva02_k4"
+    assert k4.model.backend == "llm2clip"
+    assert k4.model.features_only is False
+    assert k4.data.sampler.identities == tuned.data.sampler.identities
+    assert k4.data.sampler.instances == 4
+    assert k4.data.sampler.camera_diverse is False
+    assert tuned.data.sampler.instances == 4
+    assert tuned.data.sampler.camera_diverse is True
+    assert k4_cam.name == "eva02_k4_cam"
+    assert k4_cam.data.sampler.instances == 4
+    assert k4_cam.data.sampler.camera_diverse is True
+    assert k4.train.epochs == tuned.train.epochs
+    assert k4.train.accumulate_grad_batches == tuned.train.accumulate_grad_batches
+    assert list(k4.data.image_size) == [336, 336]
 
 
 def test_eva_mask_token_and_vector_features(cfg, monkeypatch):

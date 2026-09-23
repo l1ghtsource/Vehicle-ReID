@@ -4,6 +4,8 @@ backend: llm2clip
 name: microsoft/LLM2CLIP-EVA02-L-14-336
 revision: e6a348e3b1448ff6e2b0f6b09c1b8e9343461e4b
 features_only: false
+# concat keeps one pooled vector per selected block. mean averages token maps first.
+multilevel_fuse: concat
 feature_dims: [1024]
 layout: NLC
 num_prefix_tokens: 1
