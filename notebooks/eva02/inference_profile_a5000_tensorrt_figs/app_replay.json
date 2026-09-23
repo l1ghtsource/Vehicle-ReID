@@ -1,0 +1,17 @@
+{
+  "kind": "A5000 offline staged-app TensorRT serving replay",
+  "actual_docker_image": false,
+  "app_root": "/app",
+  "input_root": "/data",
+  "engine": "/app/weights/finetuned/eva02_fp16.engine",
+  "weights_verified": true,
+  "wall_seconds_rounded": 39,
+  "query_count": 1110,
+  "gallery_count": 750,
+  "accepted": 1054,
+  "refused": 56,
+  "embeddings_identical_to_repository_run": true,
+  "submission_identical_to_repository_run": true,
+  "candidates_identical_to_repository_run": true,
+  "limitation": "Executed inside the unprivileged Vast container from a Dockerfile-style staged /app tree, not inside a newly built Docker image."
+}

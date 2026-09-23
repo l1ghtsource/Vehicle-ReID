@@ -16,6 +16,14 @@ WORKDIR /app
 COPY requirements/runtime.txt /app/requirements/runtime.txt
 RUN python -m pip install --no-cache-dir --require-hashes -r requirements/runtime.txt
 
+COPY requirements/tensorrt.txt /app/requirements/tensorrt.txt
+ARG WITH_TENSORRT=0
+RUN if [ "$WITH_TENSORRT" = "1" ]; then \
+        python -m pip install --no-cache-dir -r requirements/tensorrt.txt; \
+    elif [ "$WITH_TENSORRT" != "0" ]; then \
+        echo "WITH_TENSORRT must be 0 or 1" >&2; exit 2; \
+    fi
+
 COPY pyproject.toml /app/pyproject.toml
 COPY models /app/models
 COPY modules /app/modules

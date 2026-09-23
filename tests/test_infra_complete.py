@@ -27,6 +27,8 @@ def test_docker_offline_image_pins_and_bakes_weights():
     makefile = (ROOT / "Makefile").read_text()
     assert "COPY refusal /app/refusal" in dockerfile
     assert "COPY weights/finetuned /app/weights/finetuned" in dockerfile
+    assert "ARG WITH_TENSORRT=0" in dockerfile
+    assert "requirements/tensorrt.txt" in dockerfile
     assert "--require-hashes" in dockerfile
     assert "HF_HUB_OFFLINE=1" in dockerfile
     assert "TRANSFORMERS_OFFLINE=1" in dockerfile

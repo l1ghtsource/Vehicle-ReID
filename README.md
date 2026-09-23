@@ -1049,8 +1049,8 @@ Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inferenc
 - Decode/preprocess is shared with Docker (`data.decode_backend=pil`). Old serving checkpoints
   omit that key; load fills `pil`, and `decode_backend_name` does the same without attribute access.
   `jpeg` is CPU torchvision decode. `jpeg_cuda` is rejected in DataLoader workers: a GPU JPEG path
-  has to crop and normalize tensors in the main process, not inside workers. TensorRT is next after
-  a static-vs-dynamic compile comparison.
+  has to crop and normalize tensors in the main process, not inside workers. An optional ONNX →
+  TensorRT backend is documented below.
 
 The container is `pytorch/pytorch:2.8.0-cuda12.8`. Organizers list a CUDA **12.2** driver. That gap
 does not by itself prove incompatibility, but NVIDIA documents limits on minor CUDA compatibility;
@@ -1069,6 +1069,75 @@ The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved 
 training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. The
 A5000 profile above uses the same kernels. A Docker-capable GPU host is needed to verify the
 actual built image.
+
+### Optional ONNX → TensorRT inference
+
+The default remains PyTorch. The optional exporter converts the embedding-only model to a
+fixed-336×336 ONNX graph with dynamic batch, then builds an FP16 TensorRT engine for the current
+GPU. It preserves the existing crop, preprocessing, TTA (at scale 1.0), retrieval, and refusal
+pipeline. The engine manifest checks the source checkpoint hash, selected EMA/raw weights,
+image size, TensorRT version, and GPU model/compute capability before inference. TensorRT is a
+GPU-specific artifact: rebuild it in the target environment; do not assume the A5000 engine will
+load on the organizers' driver or TensorRT runtime.
+
+```bash
+python -m pip install -r requirements/tensorrt.txt
+python -m scripts.export_tensorrt \
+  checkpoint=weights/finetuned/eva02.pt \
+  eval.tensorrt.onnx_path=/tmp/eva02.onnx \
+  eval.tensorrt.engine_path=weights/finetuned/eva02_fp16.engine
+python scripts/verify_weights.py --root weights/finetuned --write
+python eval.py checkpoint=weights/finetuned/eva02.pt data.root=/data \
+  eval.split=test eval.output_dir=/runs/submission eval.top_k=10 \
+  refusal=eva02_model eval.inference_backend=tensorrt \
+  eval.tensorrt.engine_path=weights/finetuned/eva02_fp16.engine
+```
+
+Run the commands from the repository root and adjust `data.root` for the host. The ONNX file is
+only an intermediate and must
+**not** be bundled with both the checkpoint and engine under the 2 GiB weight cap. To build an
+optional image with TensorRT installed, use `docker build --build-arg WITH_TENSORRT=1 ...` after
+placing the engine and its `.json` manifest under `weights/finetuned/` and regenerating
+`SHA256SUMS`. The default Docker build and `CMD` remain PyTorch. No actual TensorRT Docker image
+was built on Vast because that instance does not support Docker-in-Docker.
+
+The [same-image A5000 reports](notebooks/eva02/inference_profile_a5000_tensorrt_figs/report_torch.json)
+and [TensorRT report](notebooks/eva02/inference_profile_a5000_tensorrt_figs/report_tensorrt.json)
+use the first 32 test queries, identical crops, bf16 PyTorch / FP16 TensorRT, no TTA, 50 warmups,
+300 batch-1 `extract()` cycles, and ≥10 s per batch for throughput. They are separate processes
+on one RTX A5000 host; the profile is not an official score.
+
+| A5000 `extract()` metric | PyTorch | ONNX → TensorRT FP16 |
+| --- | ---: | ---: |
+| Batch-1 median | 26.0 ms | **24.6 ms** |
+| Batch-1 p90 | 37.8 ms | **31.2 ms** |
+| Best throughput | **133.0 FPS** (batch 32) | 128.5 FPS (batch 16) |
+| Batch-32 throughput | **133.0 FPS** | 115.0 FPS |
+| Checkpoint + engine weight files | 1,228,959,035 B | 1,840,850,695 B |
+| Calculated performance score | 0.20/0.20 | 0.20/0.20 |
+
+On this A5000 the one-time ONNX export took 17.5 s and TensorRT engine build took 72.0 s;
+the ONNX intermediate was 1,217,505,719 B and the FP16 engine 611,891,660 B. These build
+costs are excluded from `extract()` and full serving replay timings.
+
+TensorRT's allocation is invisible to PyTorch's `max_memory_allocated`; the raw TensorRT report's
+~44 MiB batch-32 number is **not total GPU usage**. An isolated CUDA free-memory probe measured
+~1,270 MiB after engine load and ~1,346 MiB after one batch-32 forward, relative to an initialized
+CUDA context ([probe](notebooks/eva02/inference_profile_a5000_tensorrt_figs/gpu_memory_probe.json)).
+On the full 1,110-query/750-gallery test entrypoint, TensorRT finished in 35.3 s versus the
+previous PyTorch replay's 67.3 s with a reused compile cache (142.7 s cold). The tests used
+the same checkpoint and refusal model, but separate runs. TensorRT changed top-1 for 2/1,110
+queries and the accept/reject set for 2 queries; both produced 1,054 accepted queries. The
+[output comparison](notebooks/eva02/inference_profile_a5000_tensorrt_figs/test_output_comparison.json)
+records the exact embedding and output deltas. Labeled fold validation is needed before
+switching the default backend. An attempted fold-0 replay with this **final serving checkpoint**
+was correctly rejected because its training `label_map` contains fold-0 identities. A genuine
+mAP@10/refusal comparison needs the corresponding identity-disjoint fold checkpoint; the final
+all-data checkpoint cannot supply an honest labeled validation result.
+An [offline replay](notebooks/eva02/inference_profile_a5000_tensorrt_figs/app_replay.json)
+from the Dockerfile-style staged `/app` tree took 39 s and produced byte-identical embeddings,
+submission, and candidates to the repository TensorRT run. The
+actual built Docker image remains untested on this unprivileged Vast container.
 
 ## Open-set refusal
 

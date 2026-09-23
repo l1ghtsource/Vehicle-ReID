@@ -1,0 +1,22 @@
+{
+  "baseline": "/runs/submission_deterministic",
+  "tensorrt": "/runs/submission_trt_refusal",
+  "embedding_shape": [
+    1860,
+    256
+  ],
+  "max_abs_embedding_delta": 0.010548201389610767,
+  "mean_abs_embedding_delta": 0.0004577490035444498,
+  "min_cosine": 0.9986419677734375,
+  "top1_changed": 2,
+  "top10_rows_changed": 373,
+  "accepted_torch": 1054,
+  "accepted_tensorrt": 1054,
+  "accept_set_symmetric_difference": 2,
+  "submission_shape": [
+    1110,
+    11
+  ],
+  "candidates_torch": 10540,
+  "candidates_tensorrt": 10540
+}

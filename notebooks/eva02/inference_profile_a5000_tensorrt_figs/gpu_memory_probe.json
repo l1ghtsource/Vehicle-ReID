@@ -1,0 +1,9 @@
+{
+  "method": "Isolated process: torch.cuda.mem_get_info free-memory delta from initialized CUDA context, before engine load, after TensorRT engine load, and after one synchronized batch-32 forward. Includes TensorRT's allocations not tracked by the PyTorch allocator; not an exact peak.",
+  "gpu_total_gib": 23.547119140625,
+  "engine_load_mib": 1270.0,
+  "engine_plus_batch32_mib": 1346.0,
+  "torch_allocator_after_batch32_mib": 42.03125,
+  "engine": "/workspace/reid_trt/eva02_fp16.engine",
+  "checkpoint": "/workspace/ReID/weights/finetuned/eva02.pt"
+}
