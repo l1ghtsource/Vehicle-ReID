@@ -104,8 +104,8 @@ eval:
   output_dir: ${output_dir}/evaluation
   top_k: 10
   save_distances: true
-  # Flash/mem-efficient SDPA and cuDNN benchmark. Off restores trainer.deterministic.
-  fast_kernels: true
+  # Reproducible inference by default. Opt in to TF32 and cuDNN benchmark for speed experiments.
+  fast_kernels: false
   cpu_threads: 0
   tta:
     enabled: false

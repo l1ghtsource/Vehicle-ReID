@@ -1,4 +1,5 @@
 import multiprocessing as mp
+import os
 import pickle
 from types import SimpleNamespace
 
@@ -136,7 +137,7 @@ def test_sdpa_training_dropout_and_direct_forward():
     assert out.shape == (2, 4, 16)
 
 
-def test_compile_and_runtime_helpers():
+def test_compile_and_runtime_helpers(monkeypatch):
     linear = nn.Linear(4, 4)
     assert maybe_compile(linear, False) is linear
     with pytest.raises(ValueError, match="compile_mode"):
@@ -157,12 +158,18 @@ def test_compile_and_runtime_helpers():
     fast = OmegaConf.create({"eval": {"cpu_threads": 1, "fast_kernels": True}})
     configure_runtime(fast)
     assert torch.get_num_threads() == 1
+    assert bool(torch.backends.cuda.matmul.allow_tf32) is True
+    monkeypatch.delenv("CUBLAS_WORKSPACE_CONFIG", raising=False)
     slow = OmegaConf.create(
         {"eval": {"cpu_threads": 0, "fast_kernels": False}, "trainer": {"deterministic": False}}
     )
     configure_runtime(slow)
+    assert bool(torch.backends.cuda.matmul.allow_tf32) is False
+    assert bool(torch.backends.cudnn.benchmark) is False
     model = prepare_inference_model(nn.Linear(3, 3), OmegaConf.create({"model": {"compile": False}}))
     assert isinstance(model, nn.Linear)
+    assert torch.are_deterministic_algorithms_enabled()
+    assert os.environ["CUBLAS_WORKSPACE_CONFIG"] == ":4096:8"
     compiled_cfg = OmegaConf.create(
         {"eval": {"fast_kernels": True}, "model": {"compile": True, "compile_mode": "default"}}
     )

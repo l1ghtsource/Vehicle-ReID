@@ -104,6 +104,7 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
             "top_k": cfg.eval.top_k,
             "save_distances": cfg.eval.save_distances,
             "precision": cfg.eval.precision,
+            "fast_kernels": bool(OmegaConf.select(cfg, "eval.fast_kernels", default=False)),
         },
     }
     refusal = OmegaConf.select(cfg, "refusal", default=missing)

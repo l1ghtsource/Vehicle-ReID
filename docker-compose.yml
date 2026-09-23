@@ -9,6 +9,7 @@ services:
       HF_DATASETS_OFFLINE: "1"
       TRANSFORMERS_OFFLINE: "1"
       NO_ALBUMENTATIONS_UPDATE: "1"
+      CUBLAS_WORKSPACE_CONFIG: ":4096:8"
     volumes:
       - ${DATA_ROOT:-./data}:/data:ro
       - ${OUTPUT_DIR:-./runs/submission}:/runs/submission
@@ -18,4 +19,5 @@ services:
       - eval.split=test
       - eval.output_dir=/runs/submission
       - eval.top_k=10
+      - eval.fast_kernels=false
       - refusal=eva02_model

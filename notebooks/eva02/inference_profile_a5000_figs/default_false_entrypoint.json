@@ -1,0 +1,39 @@
+{
+  "kind": "docker-entrypoint-replay",
+  "actual_docker_image": false,
+  "reason": "Vast base is an unprivileged container without nested Docker",
+  "command": [
+    "/venv/main/bin/python",
+    "/app/eval.py",
+    "checkpoint=/app/weights/finetuned/eva02.pt",
+    "data.root=/data",
+    "eval.split=test",
+    "eval.output_dir=/runs/submission",
+    "eval.top_k=10",
+    "refusal=eva02_model"
+  ],
+  "started_utc": "2026-09-23T17:19:50.675673+00:00",
+  "wall_s": 137.3819865139958,
+  "exit_code": 0,
+  "max_rss_kib": 5765056,
+  "files": {
+    "embeddings.npy": 1904768,
+    "retrieval_embeddings.npy": 1904768,
+    "distances.npy": 3330128,
+    "query.csv": 62075,
+    "gallery.csv": 41850,
+    "embedding_order.csv": 61389,
+    "submission.csv": 402930,
+    "candidates.csv": 896239,
+    "metrics.json": 228,
+    "config.yaml": 9486
+  },
+  "log": "/workspace/ReID/runs/a5000_docker_like/eval.log",
+  "environment": {
+    "gpu": "NVIDIA RTX A5000",
+    "python": "/venv/main/bin/python",
+    "cwd": "/app",
+    "data_root": "/data",
+    "outputs": "/runs/submission"
+  }
+}

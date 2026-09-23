@@ -8,7 +8,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     HF_HUB_OFFLINE=1 \
     HF_DATASETS_OFFLINE=1 \
     TRANSFORMERS_OFFLINE=1 \
-    TOKENIZERS_PARALLELISM=false
+    TOKENIZERS_PARALLELISM=false \
+    CUBLAS_WORKSPACE_CONFIG=:4096:8
 
 WORKDIR /app
 
@@ -32,4 +33,4 @@ RUN python -m pip install --no-cache-dir --no-deps . \
     && python scripts/verify_weights.py --root /app/weights/finetuned
 
 ENTRYPOINT ["python", "eval.py"]
-CMD ["checkpoint=/app/weights/finetuned/eva02.pt", "data.root=/data", "eval.split=test", "eval.output_dir=/runs/submission", "eval.top_k=10", "refusal=eva02_model"]
+CMD ["checkpoint=/app/weights/finetuned/eva02.pt", "data.root=/data", "eval.split=test", "eval.output_dir=/runs/submission", "eval.top_k=10", "eval.fast_kernels=false", "refusal=eva02_model"]

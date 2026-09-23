@@ -1,3 +1,4 @@
+import os
 from typing import Any, cast
 
 import torch
@@ -161,7 +162,7 @@ def configure_runtime(cfg) -> None:
     threads = int(OmegaConf.select(cfg, "eval.cpu_threads", default=0) or 0)
     if threads > 0:
         torch.set_num_threads(threads)
-    fast = bool(OmegaConf.select(cfg, "eval.fast_kernels", default=True))
+    fast = bool(OmegaConf.select(cfg, "eval.fast_kernels", default=False))
     if fast:
         torch.use_deterministic_algorithms(False)
         torch.backends.cudnn.benchmark = True
@@ -171,8 +172,12 @@ def configure_runtime(cfg) -> None:
         torch.backends.cuda.enable_mem_efficient_sdp(True)
         torch.backends.cuda.enable_math_sdp(True)
         return
-    torch.use_deterministic_algorithms(bool(OmegaConf.select(cfg, "trainer.deterministic", default=True)))
+    deterministic = bool(OmegaConf.select(cfg, "trainer.deterministic", default=True))
+    if deterministic:
+        os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
+    torch.use_deterministic_algorithms(deterministic)
     torch.backends.cudnn.benchmark = False
+    torch.backends.cuda.matmul.allow_tf32 = False
 
 
 def prepare_inference_model(model, cfg) -> Any:

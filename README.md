@@ -979,8 +979,64 @@ TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.
 | Peak VRAM | 1.14 GiB @ b1 → **1.18 GiB @ b32** |
 | Load | 4.8 s wrap; compile graph is paid on first forward, then excluded from timed extract |
 | Serving `eva02.pt` | **~1.14 GiB** (under the 2 GiB cap) |
-| Determinism | bit-identical on two compiled extracts |
+| Determinism | bit-identical on two compiled extracts within one process |
 | Official performance | latency_score **1.0**, throughput_score **1.0**, performance_score **0.20** |
+
+Additional RTX A5000 profile: [executed notebook](notebooks/eva02/inference_profile_a5000.ipynb)
+and [raw report](notebooks/eva02/inference_profile_a5000_figs/report.json). The profiling code
+starts from Git commit `ebecee1` and runs with `eval.fast_kernels=false`, using the same serving
+`eva02.pt`, fold-0 query protocol, bf16 and TTA
+off. One Vast.ai run used an RTX A5000 (24 GiB), driver 580.178.04, torch 2.8.0+cu128 / CUDA
+12.8, and an i9-10900X host with a 4.8-core CPU quota. The Vast container and host are different
+from the organizers’ environment.
+
+| Metric | RTX A5000 |
+| --- | --- |
+| `latency_b1` | **26.5 ms** median (p90 34.5, p99 43.3 ms), 50 warmups + 300 full `extract()` cycles |
+| `throughput` | **133.6 FPS** at batch 32; batch 1 / 8 / 16: 61.8 / 123.0 / 130.5 FPS, ≥10 s per batch |
+| Peak VRAM | **1.18 GiB** @ b32 |
+| Load | 6.3 s wrap; first-forward compile excluded from the timed cycles |
+| Serving `eva02.pt` | **1.14 GiB**, below the 2 GiB cap |
+| Determinism | bit-identical on two compiled extracts within one process |
+| Calculated performance | latency_score **1.0**, throughput_score **1.0**, performance_score **0.20/0.20** |
+
+Against the isolated H200 run above, median batch-1 latency is 1.64× and best throughput is
+5.19× lower. This is a whole-system comparison: GPU, CPU quota, driver, base image, and the
+`fast_kernels` setting differ. The prior A5000 [fast-kernel report](notebooks/eva02/inference_profile_a5000_figs/report_fast_kernels.json)
+measured 26.6 ms and 134.2 FPS; the difference on this one host is small. The synchronized stage
+diagnostic measured decode **9.3 ms** and forward **14.9 ms** on A5000;
+stage times do not add to end-to-end latency. The calculated score is not an official submission
+result.
+
+![A5000 extract stage breakdown](notebooks/eva02/inference_profile_a5000_figs/stages.png)
+
+![A5000 extract throughput](notebooks/eva02/inference_profile_a5000_figs/throughput.png)
+
+Full serving entrypoint replay on the same A5000 used the **1,110 test queries and 750 test
+gallery images**, the Dockerfile's `/app` file list, both verified weight files, pinned runtime
+requirements, offline environment variables, and the Docker `CMD` arguments. This Vast instance is
+an unprivileged container without Docker-in-Docker, so this tests the serving code and package
+contents, **not the built Docker image**. [Detailed timings and output checks](notebooks/eva02/inference_profile_a5000_figs/docker_entrypoint_replay.json).
+
+| Mode | Empty compile cache | Reused compile cache | Cross-process output |
+| --- | ---: | ---: | --- |
+| `eval.fast_kernels=true` (previous default) | **159.5 s** | 78.2 s, 69.1 s | One of three runs differed |
+| `eval.fast_kernels=false` (current default) | **142.7 s** | 67.3 s | Identical in two runs |
+
+All five runs exited successfully. The previous default run wrote a headerless 1,110×11 `submission.csv`,
+finite 1,860×256 `embeddings.npy`, and 10,540 `candidates.csv` rows for 1,054 accepted queries.
+Every top-10 ID belongs to the gallery. The other `true` run changed the top-10 order for
+181/1,110 queries and flipped one refusal (56 → 55), while all top-1 choices stayed the same.
+`fast_kernels=false` produced byte-identical embeddings, submission, and candidates across its
+two runs. Relative to the `true` result, it changed some lower ranks but no top-1 choices or
+accept/reject decisions in this test. `false` is now the Hydra, checkpoint-loader, Dockerfile, and
+Compose default; `eval.fast_kernels=true` remains an explicit opt-in. The Docker environment sets
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`, which deterministic CuBLAS needs on CUDA. A sixth full replay
+with **no** `eval.fast_kernels` CLI override used the new `false` default, exited successfully in
+137.4 s with an existing Inductor cache directory, and produced embeddings, submission, and
+candidates **byte-identical** to the earlier explicit-`false` run. The ranking change has not
+yet been scored against labeled validation, so mAP@10 and refusal effects remain unknown. The built image
+still needs a `docker run --gpus all --network none` check on a Docker-capable GPU host.
 
 Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inference_model`):
 
@@ -1010,8 +1066,9 @@ the image has to be run on that driver, not assumed safe.
 *DataLoader `extract_frame` throughput on the K=4 camera-diverse serving file. Best is 693 FPS at batch 32.*
 
 The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A
-training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. Contest
-A5000 numbers will be slower than this H200; the same kernels still apply.
+training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. The
+A5000 profile above uses the same kernels. A Docker-capable GPU host is needed to verify the
+actual built image.
 
 ## Open-set refusal
 
