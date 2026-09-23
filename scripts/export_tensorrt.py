@@ -1,5 +1,3 @@
-"""Export a serving checkpoint to ONNX and build an optional TensorRT engine."""
-
 import gc
 import json
 import time

@@ -1,5 +1,3 @@
-"""Optional TensorRT backend for an exported embedding-only ONNX graph."""
-
 import hashlib
 import importlib
 import json
@@ -42,8 +40,6 @@ def read_engine_manifest(engine_path: str | Path, checkpoint_path: str | Path) -
 
 
 class TensorRTEmbedding:
-    """Run a TensorRT engine on a dedicated CUDA stream and return a torch tensor."""
-
     def __init__(self, engine_path: str | Path, checkpoint_path: str | Path, device: torch.device):
         api = require_tensorrt()
         if device.type != "cuda":

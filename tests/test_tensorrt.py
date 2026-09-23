@@ -1,5 +1,3 @@
-"""CPU-only contract tests for the optional TensorRT export and runtime."""
-
 import hashlib
 import json
 import runpy
