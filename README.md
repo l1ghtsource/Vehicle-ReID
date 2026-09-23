@@ -979,8 +979,64 @@ TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.
 | Peak VRAM | 1.14 GiB @ b1 → **1.18 GiB @ b32** |
 | Load | 4.8 s wrap; compile graph is paid on first forward, then excluded from timed extract |
 | Serving `eva02.pt` | **~1.14 GiB** (under the 2 GiB cap) |
-| Determinism | bit-identical on two compiled extracts |
+| Determinism | bit-identical on two compiled extracts within one process |
 | Official performance | latency_score **1.0**, throughput_score **1.0**, performance_score **0.20** |
+
+Additional RTX A5000 profile: [executed notebook](notebooks/eva02/inference_profile_a5000.ipynb)
+and [raw report](notebooks/eva02/inference_profile_a5000_figs/report.json). The profiling code
+starts from Git commit `ebecee1` and runs with `eval.fast_kernels=false`, using the same serving
+`eva02.pt`, fold-0 query protocol, bf16 and TTA
+off. One Vast.ai run used an RTX A5000 (24 GiB), driver 580.178.04, torch 2.8.0+cu128 / CUDA
+12.8, and an i9-10900X host with a 4.8-core CPU quota. The Vast container and host are different
+from the organizers’ environment.
+
+| Metric | RTX A5000 |
+| --- | --- |
+| `latency_b1` | **26.5 ms** median (p90 34.5, p99 43.3 ms), 50 warmups + 300 full `extract()` cycles |
+| `throughput` | **133.6 FPS** at batch 32; batch 1 / 8 / 16: 61.8 / 123.0 / 130.5 FPS, ≥10 s per batch |
+| Peak VRAM | **1.18 GiB** @ b32 |
+| Load | 6.3 s wrap; first-forward compile excluded from the timed cycles |
+| Serving `eva02.pt` | **1.14 GiB**, below the 2 GiB cap |
+| Determinism | bit-identical on two compiled extracts within one process |
+| Calculated performance | latency_score **1.0**, throughput_score **1.0**, performance_score **0.20/0.20** |
+
+Against the isolated H200 run above, median batch-1 latency is 1.64× and best throughput is
+5.19× lower. This is a whole-system comparison: GPU, CPU quota, driver, base image, and the
+`fast_kernels` setting differ. The prior A5000 [fast-kernel report](notebooks/eva02/inference_profile_a5000_figs/report_fast_kernels.json)
+measured 26.6 ms and 134.2 FPS; the difference on this one host is small. The synchronized stage
+diagnostic measured decode **9.3 ms** and forward **14.9 ms** on A5000;
+stage times do not add to end-to-end latency. The calculated score is not an official submission
+result.
+
+![A5000 extract stage breakdown](notebooks/eva02/inference_profile_a5000_figs/stages.png)
+
+![A5000 extract throughput](notebooks/eva02/inference_profile_a5000_figs/throughput.png)
+
+Full serving entrypoint replay on the same A5000 used the **1,110 test queries and 750 test
+gallery images**, the Dockerfile's `/app` file list, both verified weight files, pinned runtime
+requirements, offline environment variables, and the Docker `CMD` arguments. This Vast instance is
+an unprivileged container without Docker-in-Docker, so this tests the serving code and package
+contents, **not the built Docker image**. [Detailed timings and output checks](notebooks/eva02/inference_profile_a5000_figs/docker_entrypoint_replay.json).
+
+| Mode | Empty compile cache | Reused compile cache | Cross-process output |
+| --- | ---: | ---: | --- |
+| `eval.fast_kernels=true` (previous default) | **159.5 s** | 78.2 s, 69.1 s | One of three runs differed |
+| `eval.fast_kernels=false` (current default) | **142.7 s** | 67.3 s | Identical in two runs |
+
+All five runs exited successfully. The previous default run wrote a headerless 1,110×11 `submission.csv`,
+finite 1,860×256 `embeddings.npy`, and 10,540 `candidates.csv` rows for 1,054 accepted queries.
+Every top-10 ID belongs to the gallery. The other `true` run changed the top-10 order for
+181/1,110 queries and flipped one refusal (56 → 55), while all top-1 choices stayed the same.
+`fast_kernels=false` produced byte-identical embeddings, submission, and candidates across its
+two runs. Relative to the `true` result, it changed some lower ranks but no top-1 choices or
+accept/reject decisions in this test. `false` is now the Hydra, checkpoint-loader, Dockerfile, and
+Compose default; `eval.fast_kernels=true` remains an explicit opt-in. The Docker environment sets
+`CUBLAS_WORKSPACE_CONFIG=:4096:8`, which deterministic CuBLAS needs on CUDA. A sixth full replay
+with **no** `eval.fast_kernels` CLI override used the new `false` default, exited successfully in
+137.4 s with an existing Inductor cache directory, and produced embeddings, submission, and
+candidates **byte-identical** to the earlier explicit-`false` run. The ranking change has not
+yet been scored against labeled validation, so mAP@10 and refusal effects remain unknown. The built image
+still needs a `docker run --gpus all --network none` check on a Docker-capable GPU host.
 
 Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inference_model`):
 
@@ -993,8 +1049,8 @@ Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inferenc
 - Decode/preprocess is shared with Docker (`data.decode_backend=pil`). Old serving checkpoints
   omit that key; load fills `pil`, and `decode_backend_name` does the same without attribute access.
   `jpeg` is CPU torchvision decode. `jpeg_cuda` is rejected in DataLoader workers: a GPU JPEG path
-  has to crop and normalize tensors in the main process, not inside workers. TensorRT is next after
-  a static-vs-dynamic compile comparison.
+  has to crop and normalize tensors in the main process, not inside workers. An optional ONNX →
+  TensorRT backend is documented below.
 
 The container is `pytorch/pytorch:2.8.0-cuda12.8`. Organizers list a CUDA **12.2** driver. That gap
 does not by itself prove incompatibility, but NVIDIA documents limits on minor CUDA compatibility;
@@ -1010,8 +1066,78 @@ the image has to be run on that driver, not assumed safe.
 *DataLoader `extract_frame` throughput on the K=4 camera-diverse serving file. Best is 693 FPS at batch 32.*
 
 The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A
-training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. Contest
-A5000 numbers will be slower than this H200; the same kernels still apply.
+training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. The
+A5000 profile above uses the same kernels. A Docker-capable GPU host is needed to verify the
+actual built image.
+
+### Optional ONNX → TensorRT inference
+
+The default remains PyTorch. The optional exporter converts the embedding-only model to a
+fixed-336×336 ONNX graph with dynamic batch, then builds an FP16 TensorRT engine for the current
+GPU. It preserves the existing crop, preprocessing, TTA (at scale 1.0), retrieval, and refusal
+pipeline. The engine manifest checks the source checkpoint hash, selected EMA/raw weights,
+image size, TensorRT version, and GPU model/compute capability before inference. TensorRT is a
+GPU-specific artifact: rebuild it in the target environment; do not assume the A5000 engine will
+load on the organizers' driver or TensorRT runtime.
+
+```bash
+python -m pip install -r requirements/tensorrt.txt
+python -m scripts.export_tensorrt \
+  checkpoint=weights/finetuned/eva02.pt \
+  eval.tensorrt.onnx_path=/tmp/eva02.onnx \
+  eval.tensorrt.engine_path=weights/finetuned/eva02_fp16.engine
+python scripts/verify_weights.py --root weights/finetuned --write
+python eval.py checkpoint=weights/finetuned/eva02.pt data.root=/data \
+  eval.split=test eval.output_dir=/runs/submission eval.top_k=10 \
+  refusal=eva02_model eval.inference_backend=tensorrt \
+  eval.tensorrt.engine_path=weights/finetuned/eva02_fp16.engine
+```
+
+Run the commands from the repository root and adjust `data.root` for the host. The ONNX file is
+only an intermediate and must
+**not** be bundled with both the checkpoint and engine under the 2 GiB weight cap. To build an
+optional image with TensorRT installed, use `docker build --build-arg WITH_TENSORRT=1 ...` after
+placing the engine and its `.json` manifest under `weights/finetuned/` and regenerating
+`SHA256SUMS`. The default Docker build and `CMD` remain PyTorch. No actual TensorRT Docker image
+was built on Vast because that instance does not support Docker-in-Docker.
+
+The [same-image A5000 reports](notebooks/eva02/inference_profile_a5000_tensorrt_figs/report_torch.json)
+and [TensorRT report](notebooks/eva02/inference_profile_a5000_tensorrt_figs/report_tensorrt.json)
+use the first 32 test queries, identical crops, bf16 PyTorch / FP16 TensorRT, no TTA, 50 warmups,
+300 batch-1 `extract()` cycles, and ≥10 s per batch for throughput. They are separate processes
+on one RTX A5000 host; the profile is not an official score.
+
+| A5000 `extract()` metric | PyTorch | ONNX → TensorRT FP16 |
+| --- | ---: | ---: |
+| Batch-1 median | 26.0 ms | **24.6 ms** |
+| Batch-1 p90 | 37.8 ms | **31.2 ms** |
+| Best throughput | **133.0 FPS** (batch 32) | 128.5 FPS (batch 16) |
+| Batch-32 throughput | **133.0 FPS** | 115.0 FPS |
+| Checkpoint + engine weight files | 1,228,959,035 B | 1,840,850,695 B |
+| Calculated performance score | 0.20/0.20 | 0.20/0.20 |
+
+On this A5000 the one-time ONNX export took 17.5 s and TensorRT engine build took 72.0 s;
+the ONNX intermediate was 1,217,505,719 B and the FP16 engine 611,891,660 B. These build
+costs are excluded from `extract()` and full serving replay timings.
+
+TensorRT's allocation is invisible to PyTorch's `max_memory_allocated`; the raw TensorRT report's
+~44 MiB batch-32 number is **not total GPU usage**. An isolated CUDA free-memory probe measured
+~1,270 MiB after engine load and ~1,346 MiB after one batch-32 forward, relative to an initialized
+CUDA context ([probe](notebooks/eva02/inference_profile_a5000_tensorrt_figs/gpu_memory_probe.json)).
+On the full 1,110-query/750-gallery test entrypoint, TensorRT finished in 35.3 s versus the
+previous PyTorch replay's 67.3 s with a reused compile cache (142.7 s cold). The tests used
+the same checkpoint and refusal model, but separate runs. TensorRT changed top-1 for 2/1,110
+queries and the accept/reject set for 2 queries; both produced 1,054 accepted queries. The
+[output comparison](notebooks/eva02/inference_profile_a5000_tensorrt_figs/test_output_comparison.json)
+records the exact embedding and output deltas. Labeled fold validation is needed before
+switching the default backend. An attempted fold-0 replay with this **final serving checkpoint**
+was correctly rejected because its training `label_map` contains fold-0 identities. A genuine
+mAP@10/refusal comparison needs the corresponding identity-disjoint fold checkpoint; the final
+all-data checkpoint cannot supply an honest labeled validation result.
+An [offline replay](notebooks/eva02/inference_profile_a5000_tensorrt_figs/app_replay.json)
+from the Dockerfile-style staged `/app` tree took 39 s and produced byte-identical embeddings,
+submission, and candidates to the repository TensorRT run. The
+actual built Docker image remains untested on this unprivileged Vast container.
 
 ## Open-set refusal
 

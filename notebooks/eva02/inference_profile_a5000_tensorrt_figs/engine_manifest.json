@@ -1,0 +1,25 @@
+{
+  "checkpoint_sha256": "dd18697750923c053a448b8874285c4954243225720d8e23c31ffd3b9cc5bcd6",
+  "onnx_sha256": "482bb84790c1e8e17efd2ba2eb991c1da470a6cbe6e02a0dfb7ac28adf4e6a34",
+  "input_name": "images",
+  "output_name": "embedding",
+  "image_size": [
+    336,
+    336
+  ],
+  "min_batch": 1,
+  "opt_batch": 16,
+  "max_batch": 32,
+  "precision": "fp16",
+  "weights": "ema",
+  "tensorrt_version": "10.16.1.11",
+  "gpu": "NVIDIA RTX A5000",
+  "compute_capability": [
+    8,
+    6
+  ],
+  "onnx_bytes": 1217505719,
+  "engine_bytes": 611891660,
+  "export_s": 17.52703928700066,
+  "build_s": 71.99458484901697
+}

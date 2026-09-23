@@ -14,9 +14,10 @@ from omegaconf import OmegaConf
 
 from dataset.folds import ensure_folds, fingerprint, query_gallery_split, read_annotations, split_fingerprint
 from models import ReIDModel
-from models.kernels import prepare_inference_model
+from models.kernels import configure_runtime, prepare_inference_model
 from modules.inference import embed_frame
 from modules.metrics import retrieval_metrics
+from modules.tensorrt_backend import TensorRTEmbedding
 from postproc import postprocess
 from refusal import refusal_accept, write_candidates
 
@@ -104,6 +105,9 @@ def overlay_eval_config(saved, cfg, override_items: list[str] | None = None):
             "top_k": cfg.eval.top_k,
             "save_distances": cfg.eval.save_distances,
             "precision": cfg.eval.precision,
+            "inference_backend": str(OmegaConf.select(cfg, "eval.inference_backend", default="torch")),
+            "tensorrt": OmegaConf.select(cfg, "eval.tensorrt", default={}),
+            "fast_kernels": bool(OmegaConf.select(cfg, "eval.fast_kernels", default=False)),
         },
     }
     refusal = OmegaConf.select(cfg, "refusal", default=missing)
@@ -228,8 +232,24 @@ def main(cfg):
     L.seed_everything(cfg.seed, workers=True)
     os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG", ":4096:8")
     device = torch.device(cfg.eval.device)
-    model.to(device).eval()
-    model = prepare_inference_model(model, cfg)
+    backend = str(cfg.eval.inference_backend)
+    if backend == "torch":
+        model.to(device).eval()
+        model = prepare_inference_model(model, cfg)
+    elif backend == "tensorrt":
+        configure_runtime(cfg)
+        if bool(cfg.eval.tta.enabled) and any(float(scale) != 1.0 for scale in cfg.eval.tta.scales):
+            raise ValueError("TensorRT requires fixed input size: eval.tta.scales must be [1.0]")
+        del model
+        model = TensorRTEmbedding(cfg.eval.tensorrt.engine_path, cfg.checkpoint, device)
+        if str(model.manifest["weights"]) != choice:
+            raise ValueError("TensorRT engine weights differ from eval.weights")
+        if tuple(model.manifest["image_size"]) != tuple(cfg.data.image_size):
+            raise ValueError("TensorRT engine image_size differs from the evaluation config")
+        cfg.data.batch_size_eval = min(int(cfg.data.batch_size_eval), int(model.manifest["max_batch"]))
+        checkpoint.pop("state_dict", None)
+    else:
+        raise ValueError("eval.inference_backend must be torch/tensorrt")
     if cfg.eval.split == "val":
         folds = ensure_folds(cfg)
         if checkpoint.get("data_fingerprint") != fingerprint(folds):

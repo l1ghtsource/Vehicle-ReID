@@ -104,8 +104,17 @@ eval:
   output_dir: ${output_dir}/evaluation
   top_k: 10
   save_distances: true
-  # Flash/mem-efficient SDPA and cuDNN benchmark. Off restores trainer.deterministic.
-  fast_kernels: true
+  inference_backend: torch
+  tensorrt:
+    onnx_path: ${output_dir}/tensorrt/model.onnx
+    engine_path: ${output_dir}/tensorrt/model.engine
+    precision: fp16
+    min_batch: 1
+    opt_batch: 16
+    max_batch: 32
+    workspace_gb: 4
+  # Reproducible inference by default. Opt in to TF32 and cuDNN benchmark for speed experiments.
+  fast_kernels: false
   cpu_threads: 0
   tta:
     enabled: false

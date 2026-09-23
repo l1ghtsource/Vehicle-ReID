@@ -17,6 +17,10 @@ tmp/
 *.pt
 *.pth
 *.onnx
+*.engine
+*.engine.json
+*.plan
+*.trt
 !/weights/finetuned/*.ckpt
 !/weights/finetuned/*.pt
 !/weights/finetuned/*.pth

@@ -27,12 +27,16 @@ def test_docker_offline_image_pins_and_bakes_weights():
     makefile = (ROOT / "Makefile").read_text()
     assert "COPY refusal /app/refusal" in dockerfile
     assert "COPY weights/finetuned /app/weights/finetuned" in dockerfile
+    assert "ARG WITH_TENSORRT=0" in dockerfile
+    assert "requirements/tensorrt.txt" in dockerfile
     assert "--require-hashes" in dockerfile
     assert "HF_HUB_OFFLINE=1" in dockerfile
     assert "TRANSFORMERS_OFFLINE=1" in dockerfile
+    assert "CUBLAS_WORKSPACE_CONFIG=:4096:8" in dockerfile
     assert "scripts/verify_weights.py --root /app/weights/finetuned" in dockerfile
     assert "checkpoint=/app/weights/finetuned/eva02.pt" in dockerfile
     assert "eval.top_k=10" in dockerfile
+    assert "eval.fast_kernels=false" in dockerfile
     assert "refusal=eva02_model" in dockerfile
     assert "consul-tech" not in dockerfile
     assert "network_mode: none" in compose
@@ -40,6 +44,8 @@ def test_docker_offline_image_pins_and_bakes_weights():
     assert "./weights:/app/weights" not in compose
     assert "CHECKPOINT:-/app/weights/finetuned/eva02.pt" in compose
     assert "refusal=eva02_model" in compose
+    assert 'CUBLAS_WORKSPACE_CONFIG: ":4096:8"' in compose
+    assert "eval.fast_kernels=false" in compose
     assert "!weights/finetuned/" in dockerignore
     assert "extra_data" in dockerignore
     assert "filter=lfs" in gitattributes
@@ -164,7 +170,7 @@ def test_ruff_and_ty_pass_on_notebooks():
     )
     assert ruff.returncode == 0, ruff.stdout + ruff.stderr
     typed = subprocess.run(
-        [sys.executable, "-m", "ty", "check", str(notebooks)],
+        [sys.executable, "-m", "ty", "check", "--python", sys.executable, str(notebooks)],
         cwd=ROOT,
         capture_output=True,
         text=True,

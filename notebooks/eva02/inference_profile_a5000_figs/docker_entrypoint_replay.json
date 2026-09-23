@@ -1,0 +1,170 @@
+{
+  "kind": "a5000_serving_entrypoint_replay",
+  "actual_docker_image": false,
+  "limitation": "Vast A5000 is an unprivileged container without Docker-in-Docker; local Docker Desktop daemon is unavailable. Historical runs used the previous Docker CMD and a staged /app from its COPY list. The no-override replay used the updated eval.py and runtime files, but is still not a built-image check.",
+  "hardware": {
+    "gpu": "NVIDIA RTX A5000",
+    "driver": "580.178.04",
+    "torch": "2.8.0+cu128",
+    "torch_cuda": "12.8",
+    "python": "3.12.14",
+    "platform": "Linux-5.15.0-190-generic-x86_64-with-glibc2.39",
+    "cpu_count": 20,
+    "cpu_model": "Intel(R) Core(TM) i9-10900X CPU @ 3.70GHz",
+    "cpu_quota_cores": 4.8,
+    "git_head": "ebecee123291d97fc646f650147762066100aadf"
+  },
+  "input": {
+    "query_images": 1110,
+    "gallery_images": 750,
+    "total_images": 1860,
+    "source": "data/test_query.csv + data/test_gallery.csv + matching 1860 images",
+    "transfer_archive_sha256": "64385cededeb8ace8532ad2dc0b4e43c7d648c1455f88fc5b03d332c8fbdfaa0"
+  },
+  "fast_kernels_false": {
+    "command": [
+      "/venv/main/bin/python",
+      "/app/eval.py",
+      "checkpoint=/app/weights/finetuned/eva02.pt",
+      "data.root=/data",
+      "eval.split=test",
+      "eval.output_dir=/runs/submission_deterministic",
+      "eval.fast_kernels=false",
+      "eval.top_k=10",
+      "refusal=eva02_model"
+    ],
+    "cold_wall_s": 142.70625416497933,
+    "warm_wall_s": 67.31748540798435,
+    "exit_codes": [
+      0,
+      0
+    ],
+    "cold_vs_warm": {
+      "max_abs_embedding_delta": 0.0,
+      "mean_abs_embedding_delta": 0.0,
+      "embedding_rows_changed": 0,
+      "min_cosine": 1.0,
+      "top10_query_rows_changed": 0,
+      "top1_query_rows_changed": 0,
+      "accepted_query_counts": [
+        1054,
+        1054
+      ],
+      "accept_set_symmetric_difference": 0,
+      "embeddings_equal": true,
+      "submission_equal": true,
+      "candidates_equal": true
+    },
+    "final_output_sha256": {
+      "embeddings.npy": "071171316ca2b029ff11b447e938d03bdbebc833e6bf755b2d67ddf29f12e910",
+      "submission.csv": "b9f871d1f9627a0c4c47de684cc354610dc999fbee3c6aea8474e44b0b38a6c9",
+      "candidates.csv": "155618e1447aa6e3ccdd08b8d8763cfd4e9c17139e7ffb5a83217697194f71ea"
+    }
+  },
+  "fast_vs_deterministic": {
+    "max_abs_embedding_delta": 0.009614807553589344,
+    "mean_abs_embedding_delta": 0.0002776079345494509,
+    "embedding_rows_changed": 1860,
+    "min_cosine": 0.9986365437507629,
+    "top10_query_rows_changed": 243,
+    "top1_query_rows_changed": 0,
+    "accepted_query_counts": [
+      1054,
+      1054
+    ],
+    "accept_set_symmetric_difference": 0,
+    "embeddings_equal": false,
+    "submission_equal": false,
+    "candidates_equal": false
+  },
+  "validated_outputs": {
+    "query_count": 1110,
+    "gallery_count": 750,
+    "submission_shape": [
+      1110,
+      11
+    ],
+    "submission_header": false,
+    "candidate_rows": 10540,
+    "accepted_queries": 1054,
+    "refused_queries": 56,
+    "embedding_shape": [
+      1860,
+      256
+    ],
+    "embedding_finite": true,
+    "submission_top10_unique_valid_gallery_ids": true,
+    "candidate_ids_valid": true,
+    "tta_enabled": false,
+    "streaming": true
+  },
+  "interpretation": "Warm runs reuse the on-disk TorchInductor cache; real fresh containers pay cold compile cost. These are whole-pipeline wall times, not organizer latency_b1/throughput scores. Current no-override replay uses fast_kernels=false and matches the earlier explicit-false artifacts byte-for-byte. This run used CUBLAS_WORKSPACE_CONFIG=:4096:8.",
+  "previous_fast_kernels_true": {
+    "command": [
+      "/venv/main/bin/python",
+      "/app/eval.py",
+      "checkpoint=/app/weights/finetuned/eva02.pt",
+      "data.root=/data",
+      "eval.split=test",
+      "eval.output_dir=/runs/submission",
+      "eval.top_k=10",
+      "refusal=eva02_model"
+    ],
+    "cold_wall_s": 159.4791208319948,
+    "warm_wall_s": [
+      78.23703321901849,
+      69.13302809599554
+    ],
+    "exit_codes": [
+      0,
+      0,
+      0
+    ],
+    "cold_max_rss_kib": 5814560,
+    "first_and_third_output_hashes_equal": true,
+    "second_vs_third": {
+      "max_abs_embedding_delta": 0.004331640899181366,
+      "mean_abs_embedding_delta": 0.0002228896046290174,
+      "embedding_rows_changed": 1847,
+      "min_cosine": 0.9997316598892212,
+      "top10_query_rows_changed": 181,
+      "top1_query_rows_changed": 0,
+      "accepted_query_counts": [
+        1055,
+        1054
+      ],
+      "accept_set_symmetric_difference": 1,
+      "embeddings_equal": false,
+      "submission_equal": false,
+      "candidates_equal": false
+    },
+    "final_output_sha256": {
+      "embeddings.npy": "43dd1f06dac2b038a3d6d13e202a069012607ff65fb217f3bd8c584b5dd428e7",
+      "submission.csv": "f9fbd28996bc5b30524b5c78318cbc692cfc535d2a8c1f7e809218dc3ecfc8e6",
+      "candidates.csv": "d78b4ca4b28a25c342325ff47fe0e0764f53abd0d46930bc0ee16f67ffe8f011"
+    },
+    "first_output_sha256": {
+      "submission.csv": "f9fbd28996bc5b30524b5c78318cbc692cfc535d2a8c1f7e809218dc3ecfc8e6",
+      "candidates.csv": "d78b4ca4b28a25c342325ff47fe0e0764f53abd0d46930bc0ee16f67ffe8f011",
+      "embeddings.npy": "43dd1f06dac2b038a3d6d13e202a069012607ff65fb217f3bd8c584b5dd428e7"
+    }
+  },
+  "current_default_false": {
+    "source": "default_false_entrypoint.json",
+    "command_has_fast_kernels_override": false,
+    "effective_eval_fast_kernels": false,
+    "effective_trainer_deterministic": true,
+    "wall_s": 137.3819865139958,
+    "exit_code": 0,
+    "matches_previous_explicit_false_sha256": {
+      "embeddings.npy": true,
+      "submission.csv": true,
+      "candidates.csv": true
+    },
+    "query_count": 1110,
+    "gallery_count": 750,
+    "accepted_queries": 1054,
+    "refused_queries": 56
+  },
+  "base_git_head": "ebecee123291d97fc646f650147762066100aadf"
+}

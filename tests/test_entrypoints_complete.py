@@ -386,6 +386,16 @@ def test_overlay_eval_migrates_h7_junk_protocol(cfg):
     assert bool(defaulted.data.validation.exclude_all_same_camera) is False
 
 
+def test_overlay_eval_uses_runtime_fast_kernel_default(cfg):
+    saved = OmegaConf.create(OmegaConf.to_container(cfg, resolve=True))
+    saved.eval.fast_kernels = True
+    assert bool(eval_module.overlay_eval_config(saved, cfg, []).eval.fast_kernels) is False
+
+    cfg.eval.fast_kernels = True
+    enabled = eval_module.overlay_eval_config(saved, cfg, ["eval.fast_kernels=true"])
+    assert bool(enabled.eval.fast_kernels) is True
+
+
 def test_overlay_eval_config_partial_runtime_cfg(cfg, tmp_path, monkeypatch):
     monkeypatch.setattr(eval_module, "ReIDModel", LoadedModel)
     path = tmp_path / "model.ckpt"
