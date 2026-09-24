@@ -141,14 +141,14 @@ def test_train_full_retrain_skips_val_monitor(cfg, tmp_path, monkeypatch):
     cfg.init_checkpoint = None
     cfg.data.full_retrain = True
     cfg.data.cv_dir = None
-    cfg.train.epochs = 27
+    cfg.train.epochs = 35
     train.main.__wrapped__(cfg)
     callback = FakeTrainer.instances[-1].kwargs["callbacks"][0]
     assert FakeTrainer.instances[-1].kwargs["limit_val_batches"] == 0
     assert FakeTrainer.instances[-1].kwargs["num_sanity_val_steps"] == 0
     assert callback.kwargs["monitor"] is None
     assert callback.kwargs["save_top_k"] == 0
-    assert cfg.train.epochs == 27
+    assert cfg.train.epochs == 35
 
     cv = tmp_path / "cv"
     for fold, epoch in enumerate((25, 25, 24, 21, 12)):
@@ -500,13 +500,13 @@ def test_refusal_serving_presets():
     assert none.refusal.kind == "none"
     assert none.refusal.cosine_threshold is None
     assert threshold.refusal.kind == "threshold"
-    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7868)
+    assert float(threshold.refusal.cosine_threshold) == pytest.approx(0.7291)
     assert model.refusal.kind == "model"
-    assert float(model.refusal.model_threshold) == pytest.approx(0.5873)
+    assert float(model.refusal.model_threshold) == pytest.approx(0.5078)
     assert str(model.refusal.model_path) == "weights/finetuned/eva02_catboost.cbm"
     assert ensemble.refusal.kind == "ensemble"
-    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7868)
-    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.5873)
+    assert float(ensemble.refusal.cosine_threshold) == pytest.approx(0.7291)
+    assert float(ensemble.refusal.model_threshold) == pytest.approx(0.5078)
     assert ensemble.refusal.rank_threshold is None
     assert "refusal" not in none.eval
 

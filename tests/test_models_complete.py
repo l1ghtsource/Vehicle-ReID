@@ -488,6 +488,7 @@ def test_eva02_multilevel_keeps_trial23_recipe():
         late = compose(config_name="config", overrides=["experiment=eva02_multilevel_late"])
         k4 = compose(config_name="config", overrides=["experiment=eva02_k4"])
         k4_cam = compose(config_name="config", overrides=["experiment=eva02_k4_cam"])
+        k4_cam_ep35 = compose(config_name="config", overrides=["experiment=eva02_k4_cam_ep35"])
     assert cfg.name == "eva02_multilevel"
     assert cfg.model.backend == "llm2clip"
     assert cfg.model.features_only is True
@@ -501,6 +502,7 @@ def test_eva02_multilevel_keeps_trial23_recipe():
     assert list(cfg.data.image_size) == [336, 336]
     assert cfg.eval.weights == "ema"
     assert tuned.model.features_only is False
+    assert tuned.train.epochs == 35
     assert late.name == "eva02_multilevel_late"
     assert list(late.model.out_indices) == [20, 21, 22, 23]
     assert late.model.multilevel_fuse == "mean"
@@ -518,6 +520,10 @@ def test_eva02_multilevel_keeps_trial23_recipe():
     assert k4_cam.name == "eva02_k4_cam"
     assert k4_cam.data.sampler.instances == 4
     assert k4_cam.data.sampler.camera_diverse is True
+    assert k4_cam.train.epochs == 27
+    assert k4_cam_ep35.name == "eva02_k4_cam_ep35"
+    assert k4_cam_ep35.train.epochs == 35
+    assert k4_cam_ep35.data.sampler.camera_diverse is True
     assert k4.train.epochs == tuned.train.epochs
     assert k4.train.accumulate_grad_batches == tuned.train.accumulate_grad_batches
     assert list(k4.data.image_size) == [336, 336]

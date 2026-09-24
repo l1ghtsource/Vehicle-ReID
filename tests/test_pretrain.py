@@ -107,7 +107,7 @@ def test_current_best_tuned_matches_eva02_oof():
         )
     pretrain_module.apply_ssl_pretrain(ssl)
     assert cfg.model.name == "microsoft/LLM2CLIP-EVA02-L-14-336"
-    assert cfg.train.epochs == 27
+    assert cfg.train.epochs == 35
     assert cfg.train.accumulate_grad_batches == 4
     assert cfg.train.ema.enabled is True
     assert cfg.model.pooling.kind == "attn"
@@ -119,7 +119,7 @@ def test_current_best_tuned_matches_eva02_oof():
     assert cfg.data.sampler.instances == 4
     assert cfg.data.sampler.camera_diverse is True
     assert cfg.scheduler.kind == "linear"
-    assert list(cfg.scheduler.milestones) == [27, 28]
+    assert list(cfg.scheduler.milestones) == [35, 36]
     assert cfg.eval.weights == "ema"
     assert cfg.loss.terms[0].params.margin == pytest.approx(0.4789452160852028)
     assert cfg.optimizer.lr == pytest.approx(0.0006983608478082421)
