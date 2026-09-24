@@ -1,0 +1,18 @@
+# @package _global_
+# Top recipe (PK 16×4, camera_diverse, 35 epochs) with triplet + semi-hard mining
+# instead of ArcFace+AdaSP. Native Triplet miner (not PML). Feature = neck
+# (same retrieval head as serving). Run: runs/cv/eva02_k4_cam_ep35_triplet_semihard
+defaults:
+  - eva02_k4_cam_ep35
+  - _self_
+name: eva02_k4_cam_ep35_triplet_semihard
+loss:
+  terms:
+  - name: triplet
+    weight: 1.0
+    feature: neck
+    params:
+      margin: 0.3
+      soft_margin: false
+      normalize: true
+      mining: semihard

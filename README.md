@@ -316,7 +316,8 @@ recipe on original labeled train only: PK 16×4 with camera-diverse sampling. Id
 5-fold OOF (`runs/cv/eva02_k4_cam_ep35`): mAP 0.862, mAP@10 0.851, Rank-1 0.848 (35-epoch budget; mean best-stop full retrain uses 32). Same recipe at 27 epochs (`runs/cv/eva02_k4_cam`) scored 0.858 / 0.847 / 0.844. Without
 `camera_diverse` (`runs/cv/eva02_k4`) the 27-epoch recipe scores 0.855 / 0.844 / 0.849. 336 input,
 `local_parts=0`, ArcFace+AdaSP, linear schedule, EMA. Serving `weights/finetuned/eva02.pt` is the
-labeled-only full retrain of this recipe.
+labeled-only full retrain of this recipe. Same PK/cam/35-ep recipe with SphereFace2+AdaSP (0.856),
+InfoNCE (0.854), or triplet semihard (0.845) does not beat ArcFace+AdaSP; see Metric board.
 Isolated H200 contest `extract()` latency on that file is 16.6 ms. DataLoader throughput peaks at 532 FPS (batch 32).
 HDBSCAN test pseudo-labels were tried and are **not used**. Pass `model=` to reuse the recipe with
 another backbone.
@@ -1636,6 +1637,9 @@ have no saved `mAP@10`; the TTA+AQE mAP is the published rounded K=2 figure.
 | EVA02 trial 23, PK K=4 + camera_diverse (27 ep) | 5-fold OOF | 0.858 | 0.847 | 0.844 | not submitted |
 | **EVA02 trial 23, PK K=4 + camera_diverse (35 ep)** | **5-fold OOF** | **0.862** | **0.851** | **0.848** | **serving** |
 | EVA02 trial 23, PK K=4 + cam + SOTA augs (35 ep) | 5-fold OOF | 0.862 | 0.850 | 0.849 | not submitted |
+| EVA02 trial 23, PK K=4 + cam + SphereFace2+AdaSP (35 ep) | 5-fold OOF | 0.856 | 0.845 | 0.847 | not submitted |
+| EVA02 trial 23, PK K=4 + cam + InfoNCE / NT-Xent (35 ep) | 5-fold OOF | 0.854 | 0.843 | 0.838 | not submitted |
+| EVA02 trial 23, PK K=4 + cam + triplet semihard (35 ep) | 5-fold OOF | 0.845 | 0.834 | 0.825 | not submitted |
 | EVA02 trial 23, PK K=6 + camera_diverse | 5-fold OOF | 0.855 | 0.844 | 0.844 | not submitted |
 | EVA02 trial 74 recipe | fold 0 only | 0.832 | 0.818 | 0.825 | not submitted |
 | EVA02 multilevel (blocks 12/18/24) | 5-fold OOF, K=2 | 0.838 | 0.826 | 0.832 | not submitted |
