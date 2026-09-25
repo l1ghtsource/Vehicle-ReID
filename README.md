@@ -1305,7 +1305,7 @@ from above. Pretraining with `configs/augmentation/reid_tilt.yaml` simulates tha
 `Affine` shear (`y=[-12,-4]`, `p=0.3`) plus a light `Perspective` (`p=0.15`) on top of the tuned
 `current_best_tuned` transforms:
 
-![MAD-Cars view (left) and the same view with the tilt augmentation (right)](assets/madcars_tilt_example.jpg)
+![MAD-Cars view (left) and the same view with the tilt augmentation (right)](notebooks/eva02/readme_figs/madcars_tilt_example.jpg)
 
 Screening on a 20k-car × 10-view MAD-Cars subsample (3-fold OOF, otherwise identical recipe) shows
 the tilt is worth about +1.2 mAP points on the CV pass after pretraining:

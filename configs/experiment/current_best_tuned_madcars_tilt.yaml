@@ -9,7 +9,7 @@ defaults:
   - override /loss: arcface_adasp
   - override /optimizer: adamw
   - override /augmentation: reid_tilt
-name: current_best_tuned_tilt
+name: current_best_tuned_madcars_tilt
 data:
   context_pct: 6.201741080661072
   context_jitter_pct: 8.594371961218801

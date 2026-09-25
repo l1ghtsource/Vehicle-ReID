@@ -43,8 +43,6 @@ def apply_ssl_pretrain(cfg) -> None:
 
 
 class PeriodicLastCheckpoint(Callback):
-    """Save last.ckpt every N epochs and at train end instead of every epoch."""
-
     def __init__(self, dirpath: Path, every_n_epochs: int):
         self.dirpath = Path(dirpath)
         self.every = max(1, int(every_n_epochs))

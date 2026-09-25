@@ -128,7 +128,7 @@ class VehicleDataset(Dataset):
         if cfg.data.verify_files:
             with ThreadPoolExecutor(max_workers=32) as pool:
                 flags = list(pool.map(lambda p: p.is_file(), self.paths))
-            missing = [str(p) for p, ok in zip(self.paths, flags) if not ok]
+            missing = [str(p) for p, ok in zip(self.paths, flags, strict=True) if not ok]
             if missing:
                 raise FileNotFoundError(missing[:10])
 

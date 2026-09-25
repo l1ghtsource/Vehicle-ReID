@@ -71,11 +71,9 @@ def read_madcars(root: Path, subsample: str = "subsample.csv") -> pd.DataFrame:
     meta_path = root / "meta" / subsample
     if not image_dir.is_dir() or not meta_path.is_file():
         raise FileNotFoundError(f"Incomplete MAD-Cars dataset at {root}")
-    meta = pd.read_csv(meta_path, usecols=["car_id", "view_id"]).drop_duplicates(
-        subset=["car_id", "view_id"]
-    )
+    meta = pd.read_csv(meta_path)[["car_id", "view_id"]].drop_duplicates(subset=["car_id", "view_id"])
     rows = []
-    for car_id, view_id in zip(meta.car_id, meta.view_id):
+    for car_id, view_id in zip(meta.car_id, meta.view_id, strict=True):
         name = f"{view_id}.jpg"
         rows.append(
             {

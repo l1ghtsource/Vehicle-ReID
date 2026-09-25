@@ -1,11 +1,4 @@
 #!/usr/bin/env python
-"""Download a MAD-Cars subsample: N cars x K evenly spaced views, resized on the fly.
-
-usage: download_madcars.py [--cars 20000] [--views 10] [--min-views 4]
-                           [--max-side 768] [--concurrency 48]
-Rows are written to extra_data/madcars/meta/subsample.csv; images land in
-extra_data/madcars/images/<car_id>/<view_id>.jpg. Re-running resumes safely.
-"""
 import argparse
 import asyncio
 import io
@@ -32,7 +25,7 @@ def even_indices(n: int, target: int) -> list[int]:
 
 
 def build_subsample(cars: int, views: int, min_views: int, seed: int, subsample_path: Path) -> pd.DataFrame:
-    df = pd.read_csv(META, usecols=["car_id", "view_id", "url", "brand", "model"])
+    df = pd.read_csv(META)[["car_id", "view_id", "url", "brand", "model"]]
     counts = df.groupby("car_id").size()
     eligible = counts[counts >= min_views].index
     if cars <= 0 or cars >= len(eligible):
@@ -67,7 +60,8 @@ async def fetch_one(session: aiohttp.ClientSession, url: str, path: Path, max_si
             img.load()
         if max(img.size) > max_side:
             scale = max_side / max(img.size)
-            img = img.resize((round(img.width * scale), round(img.height * scale)), Image.LANCZOS)
+            size = (round(img.width * scale), round(img.height * scale))
+            img = img.resize(size, Image.Resampling.LANCZOS)
         buf = io.BytesIO()
         img.save(buf, "JPEG", quality=90)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +88,10 @@ async def worker(session, queue, stats, max_side, t0, total):
         done = sum(stats.values())
         if done % 1000 == 0:
             rate = done / (time.time() - t0)
-            print(f"{done}/{total} ok={stats.get('ok', 0)} skip={stats.get('skip', 0)} err={stats.get('error', 0)} [{rate:.0f} img/s]", flush=True)
+            ok = stats.get("ok", 0)
+            skip = stats.get("skip", 0)
+            err = stats.get("error", 0)
+            print(f"{done}/{total} ok={ok} skip={skip} err={err} [{rate:.0f} img/s]", flush=True)
         queue.task_done()
 
 
@@ -115,7 +112,8 @@ async def main() -> None:
     subsample_path, out = paths_for(args.dataset, args.subsample_name)
     if subsample_path.exists() and not args.prepare_only:
         sub = pd.read_csv(subsample_path)
-        print(f"reusing existing {subsample_path} ({len(sub)} images, {sub.car_id.nunique()} cars)", flush=True)
+        n_cars = sub.car_id.nunique()
+        print(f"reusing existing {subsample_path} ({len(sub)} images, {n_cars} cars)", flush=True)
     else:
         sub = build_subsample(args.cars, args.views, args.min_views, seed=42, subsample_path=subsample_path)
         print(f"subsample written: {len(sub)} images, {sub.car_id.nunique()} cars", flush=True)
@@ -123,17 +121,21 @@ async def main() -> None:
         return
     if args.num_shards > 1:
         sub = sub[sub.car_id % args.num_shards == args.shard]
-    print(f"subsample: {len(sub)} images, {sub.car_id.nunique()} cars (shard {args.shard}/{args.num_shards})", flush=True)
+    n_cars = sub.car_id.nunique()
+    print(f"subsample: {len(sub)} images, {n_cars} cars (shard {args.shard}/{args.num_shards})", flush=True)
 
     queue = asyncio.Queue()
     stats = {}
     t0 = time.time()
     connector = aiohttp.TCPConnector(limit_per_host=args.concurrency * 2)
     async with aiohttp.ClientSession(connector=connector) as session:
-        workers = [asyncio.create_task(worker(session, queue, stats, args.max_side, t0, len(sub))) for _ in range(args.concurrency)]
-        for row in sub.itertuples():
-            path = out / str(row.car_id) / f"{row.view_id}.jpg"
-            queue.put_nowait((row.url, path))
+        workers = [
+            asyncio.create_task(worker(session, queue, stats, args.max_side, t0, len(sub)))
+            for _ in range(args.concurrency)
+        ]
+        for car_id, view_id, url in zip(sub.car_id, sub.view_id, sub.url, strict=True):
+            path = out / str(car_id) / f"{view_id}.jpg"
+            queue.put_nowait((url, path))
         for _ in workers:
             queue.put_nowait(None)
         await asyncio.gather(*workers)
