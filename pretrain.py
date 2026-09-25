@@ -5,7 +5,7 @@ from typing import Any
 import hydra
 import lightning as L
 import torch
-from lightning.pytorch.callbacks import ModelCheckpoint
+from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf, open_dict
 
@@ -40,6 +40,26 @@ def apply_ssl_pretrain(cfg) -> None:
             for term in cfg.loss.terms:
                 if term.name == "dino":
                     term.params.ibot_weight = 0.0
+
+
+class PeriodicLastCheckpoint(Callback):
+    """Save last.ckpt every N epochs and at train end instead of every epoch."""
+
+    def __init__(self, dirpath: Path, every_n_epochs: int):
+        self.dirpath = Path(dirpath)
+        self.every = max(1, int(every_n_epochs))
+
+    def _save(self, trainer) -> None:
+        if trainer.is_global_zero:
+            self.dirpath.mkdir(parents=True, exist_ok=True)
+            trainer.save_checkpoint(self.dirpath / "last.ckpt")
+
+    def on_validation_epoch_end(self, trainer, pl_module) -> None:
+        if (trainer.current_epoch + 1) % self.every == 0:
+            self._save(trainer)
+
+    def on_train_end(self, trainer, pl_module) -> None:
+        self._save(trainer)
 
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="pretrain")
@@ -82,16 +102,17 @@ def main(cfg):
         monitor=None if partial else cfg.checkpointing.monitor,
         mode=cfg.checkpointing.mode,
         save_top_k=0 if partial else cfg.checkpointing.save_top_k,
-        save_last=cfg.checkpointing.save_last,
+        save_last=False,
         auto_insert_metric_name=False,
     )
+    last_checkpoint_cb = PeriodicLastCheckpoint(ckpt_dir, cfg.checkpointing.last_every_n_epochs)
     if args["devices"] != 1 and args["strategy"] == "auto":
         args["strategy"] = "ddp_find_unused_parameters_true"
     trainer = L.Trainer(
         **args,
         max_epochs=cfg.train.epochs,
         use_distributed_sampler=False,
-        callbacks=[checkpoint],
+        callbacks=[checkpoint, last_checkpoint_cb],
         logger=CSVLogger(out, name="logs"),
         default_root_dir=out,
     )
@@ -106,7 +127,7 @@ def main(cfg):
             "train_identities": dm.num_classes,
             "validation_images": len(dm.validation_frame),
             "best_checkpoint": checkpoint.best_model_path,
-            "last_checkpoint": checkpoint.last_model_path,
+            "last_checkpoint": str(ckpt_dir / "last.ckpt"),
         }
         (out / "run_summary.json").write_text(json.dumps(summary, indent=2))
         print(json.dumps(summary, indent=2))

@@ -37,7 +37,7 @@ fi
 IFS=',' read -r -a DATASET_LIST <<< "$DATASETS"
 for dataset in "${DATASET_LIST[@]}"; do
   case "$dataset" in
-    veri|vric|test_train_ssl|test_train_ssl_crop|test_train_ssl_full) ;;
+    veri|vric|madcars|test_train_ssl|test_train_ssl_crop|test_train_ssl_full) ;;
     *)
       echo "unknown dataset: $dataset" >&2
       usage
@@ -77,6 +77,30 @@ if [[ -z "${MODEL_CHECKPOINT:-}" ]]; then
     radio) MODEL_CHECKPOINT="weights/radio/model.safetensors" ;;
     llm2clip) MODEL_CHECKPOINT="weights/llm2clip/LLM2CLIP-EVA02-L-14-336.pt" ;;
   esac
+fi
+
+
+WAIT_GPU_FREE="${WAIT_GPU_FREE:-0}"
+POLL_SECS="${POLL_SECS:-60}"
+FREE_STREAK_NEEDED="${FREE_STREAK:-2}"
+
+if [[ "$WAIT_GPU_FREE" == "1" ]]; then
+  echo "waiting for GPU $GPU to be free (poll every ${POLL_SECS}s, ${FREE_STREAK_NEEDED} consecutive checks)..."
+  streak=0
+  while true; do
+    used=$(nvidia-smi --query-gpu=memory.used --format=csv,noheader,nounits -i "$GPU" || echo -1)
+    if [[ "$used" =~ ^[0-9]+$ && "$used" -eq 0 ]]; then
+      streak=$((streak + 1))
+      if [[ "$streak" -ge "$FREE_STREAK_NEEDED" ]]; then
+        echo "GPU $GPU is free ($streak consecutive checks) - starting."
+        break
+      fi
+    else
+      [[ "$streak" -gt 0 ]] && echo "GPU $GPU busy again, resetting counter."
+      streak=0
+    fi
+    sleep "$POLL_SECS"
+  done
 fi
 
 args=(

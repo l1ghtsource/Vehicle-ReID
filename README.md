@@ -1262,9 +1262,12 @@ extra_data/
 ├── VeRi/
 │   ├── image_train/
 │   └── train_label.xml
-└── VRIC/
-    ├── train_images/
-    └── vric_train.txt
+├── VRIC/
+│   ├── train_images/
+│   └── vric_train.txt
+└── madcars/
+    ├── images/<car_id>/<view_id>.jpg
+    └── meta/subsample.csv
 ```
 
 VeRi uses `image_train/` plus `train_label.xml`. Source:
@@ -1274,14 +1277,46 @@ VeRi uses `image_train/` plus `train_label.xml`. Source:
 VRIC uses `train_images/` plus `vric_train.txt` lines of `image identity camera`. Source:
 [VRIC](https://qmul-vric.github.io/). The images are derived from [UA-DETRAC](https://detrac-db.rit.albany.edu/).
 
+MAD-Cars uses `images/<car_id>/<view_id>.jpg` plus a `meta/*.csv` with `car_id,view_id` rows.
+Source: [yandex/mad-cars on Hugging Face](https://huggingface.co/datasets/yandex/mad-cars)
+(introduced by [MADrive](https://arxiv.org/abs/2506.21520),
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)). It is a large-scale
+collection of ~70k car instances with ~85 views each at up to 1920×1080; we use a working subsample
+(~1.4M images, 20 views per car) downloaded with `scripts/download_madcars.py` and listed in
+`extra_data/madcars/meta/subsample20.csv`. Views are shot handheld at ground level, so pretraining
+uses a view-from-above tilt augmentation (`configs/augmentation/reid_tilt.yaml`) to bridge the
+domain shift to the competition cameras (see below).
+
 Both datasets are public academic ReID benchmarks. Their bundled terms are research-only: attribution
-is required, redistribution and commercial use are not. That matches the task statement: public
+is required, redistribution and commercial use are not. MAD-Cars adds share-alike (CC BY-NC-SA 4.0).
+That matches the task statement: public
 pretrained weights and third-party open datasets are allowed and encouraged, while closed,
 proprietary, or unreproducible data are not. List these sources in the solution README when a
 pretrained checkpoint is submitted. Do not copy `extra_data/` into the submission; keep the
 datasets reproducible from the original downloads.
 
-These images are already cropped, so pretraining does not apply competition bounding boxes.
+VeRi and VRIC images are already cropped, so pretraining does not apply competition bounding boxes.
+MAD-Cars instances are full frames with the car as the subject, which `full_image: True` handles.
+
+#### View-from-above tilt augmentation
+
+MAD-Cars views are handheld at ground level, while competition cameras look at vehicles slightly
+from above. Pretraining with `configs/augmentation/reid_tilt.yaml` simulates that viewpoint with an
+`Affine` shear (`y=[-12,-4]`, `p=0.3`) plus a light `Perspective` (`p=0.15`) on top of the tuned
+`current_best_tuned` transforms:
+
+![MAD-Cars view (left) and the same view with the tilt augmentation (right)](assets/madcars_tilt_example.jpg)
+
+Screening on a 20k-car × 10-view MAD-Cars subsample (3-fold OOF, otherwise identical recipe) shows
+the tilt is worth about +1.2 mAP points on the CV pass after pretraining:
+
+| MAD-Cars 20k pretrain | mAP | mAP@10 | Rank-1 |
+| --- | ---: | ---: | ---: |
+| without tilt (`madcars_default`) | 0.8658 | 0.8562 | 0.8627 |
+| with tilt (`madcars_tilt`) | **0.8774** | **0.8683** | **0.8757** |
+
+The full-data run uses the tilt recipe on ~1.4M images; its checkpoint-by-checkpoint 5-fold OOF is
+in the metric board below.
 
 `pretrain.datasets=[test_train_ssl_crop]` (alias `test_train_ssl`) is unlabeled DINOv3-style
 pretraining on every competition **crop**: `train.csv` plus `test_query.csv` plus `test_gallery.csv`.
@@ -1305,7 +1340,7 @@ sources with VeRi/VRIC.
 competition `train.csv` query/gallery split. Use this to produce a backbone/head checkpoint that
 can initialize ordinary competition training.
 
-Train on VeRi, VRIC, or both. `scripts/pretrain.sh` selects the GPU, Hydra model group, extra
+Train on VeRi, VRIC, MAD-Cars, or a combination. `scripts/pretrain.sh` selects the GPU, Hydra model group, extra
 datasets, and experiment recipe. It defaults to `experiment=current_best_tuned` and local
 `weights/` checkpoints:
 
@@ -1317,6 +1352,13 @@ scripts/pretrain.sh cuda:2 radio both smoke
 scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_crop
 scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_full
 ```
+
+The full MAD-Cars pretrain runs `scripts/run_madcars_full_pretrain.sh`, which downloads nothing but
+expects `extra_data/madcars/` from `scripts/download_madcars.py` and trains
+`experiment=current_best_tuned_full` (LLM2CLIP, `reid_tilt` augmentation) on `madcars_full`.
+`configs/experiment/current_best_tuned_full.yaml` is the `current_best_tuned` recipe pointed at
+the full MAD-Cars reader (`dataset/pretrain.py` reader `madcars_full`, subsample
+`meta/subsample20.csv`).
 
 The first argument is `cuda:N` or `N`. The second is the Hydra model group. The third is `veri`,
 `vric`, `veri,vric`, `both`, `test_train_ssl_crop`, or `test_train_ssl_full` (`test_train_ssl` is a
@@ -1334,6 +1376,8 @@ Direct Hydra remains available:
   pretrain.datasets=[test_train_ssl_crop]
 .venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
   pretrain.datasets=[test_train_ssl_full]
+.venv/bin/python pretrain.py experiment=current_best_tuned_full model=llm2clip \
+  pretrain.datasets=[madcars_full] name=madcars_full
 ```
 
 The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
@@ -1773,6 +1817,8 @@ have no saved `mAP@10`; the TTA+AQE mAP is the published rounded K=2 figure.
 | Zero-shot DINOv3 ConvNeXt Large | all `train.csv` | 0.182 | 0.152 | 0.167 | probe |
 | Zero-shot RADIO C-RADIOv4-SO400M | all `train.csv` | 0.148 | 0.123 | 0.147 | probe |
 | Zero-shot LLM2CLIP EVA02-L-14-336 | all `train.csv` | 0.301 | 0.268 | 0.313 | probe |
+| LLM2CLIP VRIC pretrain ep3, pure | all `train.csv` | 0.315 | — | 0.322 | pure pretrain, no CV fine-tune; peaks ep3 then degrades |
+| LLM2CLIP MAD-Cars full pretrain ep5, pure | all `train.csv` | 0.505 | 0.479 | 0.518 | pure pretrain, no CV fine-tune; best epoch so far (ep7 pending) |
 | DINOv3 ConvNeXt-Base Optuna trial 0 | 5-fold OOF | 0.705 | — | 0.690 | search seed |
 | DINOv3 ConvNeXt-Base Optuna trial 23 | 5-fold OOF | 0.759 | — | 0.751 | search; recipe moved to EVA02 |
 | DINOv3 ConvNeXt-Base Optuna trial 72 | 5-fold OOF | 0.759 | 0.737 | 0.750 | search |
@@ -1782,6 +1828,11 @@ have no saved `mAP@10`; the TTA+AQE mAP is the published rounded K=2 figure.
 | EVA02 trial 23, PK K=4 + camera_diverse (27 ep) | 5-fold OOF | 0.858 | 0.847 | 0.844 | not submitted |
 | **[EVA02 K=4 + camera_diverse (35 ep)](configs/experiment/eva02_k4_cam_ep35.yaml)** | **5-fold OOF** | **0.862** | **0.851** | **0.848** | **serving** |
 | [SOTA augs](configs/experiment/eva02_k4_cam_ep35_augs.yaml) on K=4+cam (35 ep) | 5-fold OOF | 0.862 | 0.850 | 0.849 | not submitted |
+| LLM2CLIP + VRIC pretrain, K=4+cam | 3-fold OOF | 0.820 | 0.806 | 0.823 | pretrain sweep, not submitted |
+| LLM2CLIP + MAD-Cars 20k pretrain (no tilt), K=4+cam | 3-fold OOF | 0.866 | 0.856 | 0.863 | pretrain sweep, not submitted |
+| LLM2CLIP + MAD-Cars 20k mix (VRIC+MAD-Cars), K=4+cam | 3-fold OOF | 0.860 | 0.849 | 0.856 | pretrain sweep, not submitted |
+| LLM2CLIP + MAD-Cars 20k pretrain (tilt), K=4+cam | 3-fold OOF | 0.877 | 0.868 | 0.876 | pretrain sweep, not submitted |
+| LLM2CLIP + MAD-Cars full pretrain ep6, K=4+cam | 5-fold OOF | 0.899 | 0.891 | 0.901 | pretrain sweep best so far |
 | [SphereFace2+AdaSP](configs/experiment/eva02_k4_cam_ep35_sphereface2.yaml) on K=4+cam (35 ep) | 5-fold OOF | 0.856 | 0.845 | 0.847 | not submitted |
 | [InfoNCE / NT-Xent](configs/experiment/eva02_k4_cam_ep35_infonce.yaml) on K=4+cam (35 ep) | 5-fold OOF | 0.854 | 0.843 | 0.838 | not submitted |
 | [triplet semihard](configs/experiment/eva02_k4_cam_ep35_triplet_semihard.yaml) on K=4+cam (35 ep) | 5-fold OOF | 0.845 | 0.834 | 0.825 | not submitted |

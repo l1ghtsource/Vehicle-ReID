@@ -1,3 +1,4 @@
+from functools import partial
 from pathlib import Path
 from xml.etree import ElementTree
 
@@ -65,7 +66,39 @@ def read_vric(root: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-READERS = {"veri": read_veri, "vric": read_vric}
+def read_madcars(root: Path, subsample: str = "subsample.csv") -> pd.DataFrame:
+    image_dir = root / "images"
+    meta_path = root / "meta" / subsample
+    if not image_dir.is_dir() or not meta_path.is_file():
+        raise FileNotFoundError(f"Incomplete MAD-Cars dataset at {root}")
+    meta = pd.read_csv(meta_path, usecols=["car_id", "view_id"]).drop_duplicates(
+        subset=["car_id", "view_id"]
+    )
+    rows = []
+    for car_id, view_id in zip(meta.car_id, meta.view_id):
+        name = f"{view_id}.jpg"
+        rows.append(
+            {
+                "image_id": f"madcars:{car_id}_{view_id}",
+                "image_path": str(image_dir / str(car_id) / name),
+                "identity_key": f"madcars:{car_id}",
+                "camera_key": f"madcars:v{view_id}",
+                "full_image": True,
+                "source": "madcars",
+            }
+        )
+    if not rows:
+        raise ValueError(f"MAD-Cars annotations are empty: {meta_path}")
+    return pd.DataFrame(rows)
+
+
+READERS = {
+    "veri": read_veri,
+    "vric": read_vric,
+    "madcars": read_madcars,
+    "madcars_full": partial(read_madcars, subsample="subsample20.csv"),
+}
+
 SSL_CROP = "test_train_ssl_crop"
 SSL_FULL = "test_train_ssl_full"
 SSL_SOURCE = "test_train_ssl"
@@ -145,11 +178,13 @@ class PretrainDataModule(ReIDDataModule):
         self.validation_frame: pd.DataFrame | None = None
 
     def prepare_data(self):
-        load_external_data(self.cfg)
+        self.external_frame = load_external_data(self.cfg)
         read_annotations(self.cfg.pretrain.validation_csv, labeled=True)
 
     def setup(self, stage=None):
-        train = load_external_data(self.cfg)
+        train = self.external_frame
+        if train is None:
+            train = load_external_data(self.cfg)
         validation = read_annotations(self.cfg.pretrain.validation_csv, labeled=True)
         self.external_frame = train
         self.validation_frame = validation

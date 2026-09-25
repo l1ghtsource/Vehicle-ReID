@@ -15,7 +15,7 @@ resume: null
 # Loads model.* weights from a pretrain.py checkpoint. Mutually exclusive with resume.
 init_checkpoint: null
 data:
-  root: /data/projects/ryzhichkin/ReID/data
+  root: data
   train_csv: ${data.root}/train.csv
   # Identities in this file may be held out. Other train rows stay in train (fold=-1).
   val_source_csv: ${data.root}/train.csv
@@ -95,7 +95,8 @@ checkpointing:
   monitor: val/mAP
   mode: max
   save_top_k: 2
-  save_last: true
+  save_last: false
+  last_every_n_epochs: 5
 eval:
   split: val
   weights: auto
