@@ -1,6 +1,6 @@
 # @package _global_
 # Finished K=4 CV without camera-diverse sampling (runs/cv/eva02_k4).
-# Serving moved to camera_diverse=true; see current_best_tuned / eva02_k4_cam.
+# Serving is current_best_tuned / eva02_k4_cam_ep35 (K=4 + camera_diverse, 35 epochs).
 defaults:
   - current_best_tuned
   - _self_

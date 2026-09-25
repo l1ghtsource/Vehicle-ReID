@@ -1,0 +1,192 @@
+# @package _global_
+# Same recipe as eva02_k4_cam_ep35 (PK 16×4, camera_diverse, 35 epochs).
+# Optuna augs replaced with vehicle-ReID SOTA (FastReID / Bag-of-Tricks + CCTV).
+# Inline transforms (not /augmentation override): current_best_tuned embeds augs.
+# OOF did not beat labeled-only ep35. Run: runs/cv/eva02_k4_cam_ep35_augs
+defaults:
+  - eva02_k4_cam_ep35
+  - _self_
+name: eva02_k4_cam_ep35_augs
+augmentation:
+  transforms:
+  - name: HorizontalFlip
+    enabled: true
+    p: 0.5
+    params: {}
+  - name: RandomResizedCrop
+    enabled: true
+    p: 1.0
+    params:
+      scale: [0.70, 1.0]
+      ratio: [0.75, 1.33]
+  - name: Affine
+    enabled: true
+    p: 0.40
+    params:
+      scale: [0.90, 1.10]
+      translate_percent: [-0.06, 0.06]
+      rotate: [-12, 12]
+      shear: [-4, 4]
+      border_mode: 0
+  - name: Perspective
+    enabled: true
+    p: 0.15
+    params:
+      scale: [0.02, 0.05]
+  - name: ColorJitter
+    enabled: true
+    p: 0.80
+    params:
+      brightness: 0.25
+      contrast: 0.25
+      saturation: 0.20
+      hue: 0.04
+  - name: RandomBrightnessContrast
+    enabled: false
+    p: 0.0
+    params:
+      brightness_limit: 0.2
+      contrast_limit: 0.2
+  - name: RandomGamma
+    enabled: true
+    p: 0.30
+    params:
+      gamma_limit: [70, 130]
+  - name: HueSaturationValue
+    enabled: false
+    p: 0.0
+    params:
+      hue_shift_limit: 5
+      sat_shift_limit: 15
+      val_shift_limit: 15
+  - name: RGBShift
+    enabled: false
+    p: 0.0
+    params:
+      r_shift_limit: 10
+      g_shift_limit: 10
+      b_shift_limit: 10
+  - name: CLAHE
+    enabled: false
+    p: 0.0
+    params:
+      clip_limit: [1, 3]
+  - name: ToGray
+    enabled: false
+    p: 0.0
+    params:
+      num_output_channels: 3
+  - name: ChannelShuffle
+    enabled: false
+    p: 0.0
+    params: {}
+  - name: ImageCompression
+    enabled: true
+    p: 0.35
+    params:
+      quality_range: [40, 95]
+  - name: Downscale
+    enabled: true
+    p: 0.20
+    params:
+      scale_range: [0.55, 0.90]
+  - name: GaussianBlur
+    enabled: true
+    p: 0.20
+    params:
+      blur_limit: [3, 5]
+  - name: MotionBlur
+    enabled: true
+    p: 0.20
+    params:
+      blur_limit: [3, 7]
+  - name: Defocus
+    enabled: false
+    p: 0.0
+    params:
+      radius: [2, 5]
+      alias_blur: [0.1, 0.5]
+  - name: GaussNoise
+    enabled: true
+    p: 0.20
+    params:
+      std_range: [0.01, 0.04]
+  - name: ISONoise
+    enabled: false
+    p: 0.0
+    params:
+      intensity: [0.1, 0.3]
+  - name: MultiplicativeNoise
+    enabled: false
+    p: 0.0
+    params:
+      multiplier: [0.9, 1.1]
+  - name: RandomFog
+    enabled: false
+    p: 0.0
+    params:
+      fog_coef_range: [0.05, 0.25]
+  - name: RandomRain
+    enabled: false
+    p: 0.0
+    params:
+      rain_type: drizzle
+      blur_value: 3
+  - name: RandomSnow
+    enabled: false
+    p: 0.0
+    params:
+      snow_point_range: [0.05, 0.15]
+      brightness_coeff: 1.2
+  - name: RandomShadow
+    enabled: true
+    p: 0.25
+    params:
+      num_shadows_limit: [1, 2]
+      shadow_dimension: 5
+  - name: RandomSunFlare
+    enabled: false
+    p: 0.0
+    params:
+      src_radius: 60
+  - name: Sharpen
+    enabled: false
+    p: 0.0
+    params:
+      alpha: [0.1, 0.3]
+  - name: CoarseDropout
+    enabled: true
+    p: 0.25
+    params:
+      num_holes_range: [1, 3]
+      hole_height_range: [0.05, 0.18]
+      hole_width_range: [0.05, 0.18]
+      fill: random_uniform
+  - name: RandomErasing
+    enabled: true
+    p: 0.50
+    params:
+      scale: [0.02, 0.33]
+      ratio: [0.3, 3.3]
+      value: random
+  - name: GridDropout
+    enabled: false
+    p: 0.0
+    params:
+      ratio: 0.25
+  - name: PatchShuffle
+    enabled: false
+    p: 0.0
+    params:
+      grid: 2
+  - name: AugMix
+    enabled: false
+    p: 0.0
+    params:
+      severity: 3
+  - name: RandAugment
+    enabled: false
+    p: 0.0
+    params:
+      num_ops: 2
+      magnitude: 7

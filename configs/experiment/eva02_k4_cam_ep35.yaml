@@ -1,0 +1,13 @@
+# @package _global_
+# Named alias for the serving recipe: PK 16×4, camera_diverse, 35-epoch budget.
+# Same as current_best_tuned. OOF: runs/cv/eva02_k4_cam_ep35.
+defaults:
+  - current_best_tuned
+  - _self_
+name: eva02_k4_cam_ep35
+data:
+  sampler:
+    instances: 4
+    camera_diverse: true
+train:
+  epochs: 35

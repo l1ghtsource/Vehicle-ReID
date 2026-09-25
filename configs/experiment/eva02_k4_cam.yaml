@@ -1,6 +1,6 @@
 # @package _global_
-# Named alias for the serving recipe: PK 16×4 with camera-diverse sampling.
-# Same sampler as current_best_tuned. OOF: runs/cv/eva02_k4_cam.
+# Historical 27-epoch PK 16×4 + camera_diverse run (runs/cv/eva02_k4_cam).
+# Serving / current_best_tuned is the 35-epoch recipe (eva02_k4_cam_ep35).
 defaults:
   - current_best_tuned
   - _self_
@@ -9,3 +9,9 @@ data:
   sampler:
     instances: 4
     camera_diverse: true
+train:
+  epochs: 27
+scheduler:
+  milestones:
+  - 27
+  - 28

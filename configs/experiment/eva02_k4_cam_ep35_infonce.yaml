@@ -1,0 +1,17 @@
+# @package _global_
+# Top recipe (PK 16×4, camera_diverse, 35 epochs) with InfoNCE / NT-Xent
+# instead of ArcFace+AdaSP. PML NTXentLoss on neck (same retrieval head as
+# serving). Temperature 0.07 matches configs/loss/ntxent.yaml.
+# Run: runs/cv/eva02_k4_cam_ep35_infonce
+defaults:
+  - eva02_k4_cam_ep35
+  - _self_
+name: eva02_k4_cam_ep35_infonce
+loss:
+  terms:
+  - name: pml
+    weight: 1.0
+    feature: neck
+    target: pytorch_metric_learning.losses.NTXentLoss
+    params:
+      temperature: 0.07

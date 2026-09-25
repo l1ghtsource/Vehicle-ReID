@@ -1,0 +1,26 @@
+# @package _global_
+# Top recipe (PK 16×4, camera_diverse, 35 epochs) with SphereFace2+AdaSP
+# instead of ArcFace+AdaSP. SphereFace2 defaults from configs/loss/sphereface2.yaml;
+# AdaSP keeps the tuned weight/temp from current_best_tuned.
+# Run: runs/cv/eva02_k4_cam_ep35_sphereface2
+defaults:
+  - eva02_k4_cam_ep35
+  - _self_
+name: eva02_k4_cam_ep35_sphereface2
+loss:
+  terms:
+  - name: sphereface2
+    weight: 0.37821025890229204
+    feature: neck
+    params:
+      alpha: 0.7
+      r: 40.0
+      m: 0.4
+      t: 3.0
+      lw: 50.0
+  - name: adasp
+    weight: 2.8262507466706026
+    feature: neck
+    params:
+      temp: 0.026071235242105424
+      loss_type: adasp
