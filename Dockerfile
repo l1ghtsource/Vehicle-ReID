@@ -1,5 +1,8 @@
 FROM pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime
 
+RUN apt-get update && apt-get install -y --no-install-recommends gcc \
+    && rm -rf /var/lib/apt/lists/*
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1 \
