@@ -1817,6 +1817,8 @@ have no saved `mAP@10`; the TTA+AQE mAP is the published rounded K=2 figure.
 | Zero-shot DINOv3 ConvNeXt Large | all `train.csv` | 0.182 | 0.152 | 0.167 | probe |
 | Zero-shot RADIO C-RADIOv4-SO400M | all `train.csv` | 0.148 | 0.123 | 0.147 | probe |
 | Zero-shot LLM2CLIP EVA02-L-14-336 | all `train.csv` | 0.301 | 0.268 | 0.313 | probe |
+| LLM2CLIP VRIC pretrain ep3, pure | all `train.csv` | 0.315 | — | 0.322 | pure pretrain, no CV fine-tune; peaks ep3 then degrades |
+| LLM2CLIP MAD-Cars full pretrain ep5, pure | all `train.csv` | 0.505 | 0.479 | 0.518 | pure pretrain, no CV fine-tune; best epoch so far (ep7 pending) |
 | DINOv3 ConvNeXt-Base Optuna trial 0 | 5-fold OOF | 0.705 | — | 0.690 | search seed |
 | DINOv3 ConvNeXt-Base Optuna trial 23 | 5-fold OOF | 0.759 | — | 0.751 | search; recipe moved to EVA02 |
 | DINOv3 ConvNeXt-Base Optuna trial 72 | 5-fold OOF | 0.759 | 0.737 | 0.750 | search |
