@@ -21,7 +21,7 @@ data:
     instances: 4
     camera_diverse: true
 train:
-  epochs: 27
+  epochs: 35
   accumulate_grad_batches: 4
   gradient_clip_val: 4.373365182485516
   freeze_backbone_epochs: 0
@@ -83,8 +83,8 @@ scheduler:
   warmup_start_factor: 0.0003731205562294547
   min_lr_ratio: 0.1085248671301968
   milestones:
-  - 27
-  - 28
+  - 35
+  - 36
   gamma: 0.5963261708933612
 eval:
   weights: ema

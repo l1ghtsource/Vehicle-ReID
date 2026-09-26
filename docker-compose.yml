@@ -20,4 +20,4 @@ services:
       - eval.output_dir=/runs/submission
       - eval.top_k=10
       - eval.fast_kernels=false
-      - refusal=eva02_model
+      - refusal=eva02_ensemble

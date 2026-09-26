@@ -37,13 +37,13 @@ def test_docker_offline_image_pins_and_bakes_weights():
     assert "checkpoint=/app/weights/finetuned/eva02.pt" in dockerfile
     assert "eval.top_k=10" in dockerfile
     assert "eval.fast_kernels=false" in dockerfile
-    assert "refusal=eva02_model" in dockerfile
+    assert "refusal=eva02_ensemble" in dockerfile
     assert "consul-tech" not in dockerfile
     assert "network_mode: none" in compose
     assert "gpus: all" in compose
     assert "./weights:/app/weights" not in compose
     assert "CHECKPOINT:-/app/weights/finetuned/eva02.pt" in compose
-    assert "refusal=eva02_model" in compose
+    assert "refusal=eva02_ensemble" in compose
     assert 'CUBLAS_WORKSPACE_CONFIG: ":4096:8"' in compose
     assert "eval.fast_kernels=false" in compose
     assert "!weights/finetuned/" in dockerignore

@@ -65,6 +65,7 @@ def apply_full_retrain(cfg) -> None:
             cfg.train.epochs = mean_stop_epochs(Path(str(cfg.data.cv_dir)), int(cfg.data.n_folds))
         cfg.trainer.limit_val_batches = 0
         cfg.trainer.num_sanity_val_steps = 0
+        cfg.checkpointing.save_last = True
 
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="config")

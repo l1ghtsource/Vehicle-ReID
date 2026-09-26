@@ -1,12 +1,12 @@
-# EVA02 labeled-only K=4 camera-diverse 35-epoch 35-epoch nested 5-fold inner-CV: accept if both frozen heads agree.
-# OOF calibration only; Docker serving uses eva02_model (CatBoost).
-# Thresholds maximize 0.7 F1 + 0.3 TNR on 20% identity-hold-out eval packs (not 50/50 train pairs).
+# MAD-Cars full pretrain → competition fine-tune (madcars_full_ft_ep35) nested 5-fold
+# inner-CV: accept if both frozen heads agree. Nested contest 0.863 — Docker serving head.
+# Thresholds maximize 0.7 F1 + 0.3 TNR on 20% identity-hold-out eval packs.
 # Contest F1/TNR are micro over the query set; organizers do not re-threshold confidence.
 # A missing query_id in candidates.csv is the refusal.
 kind: ensemble
-cosine_threshold: 0.7291
+cosine_threshold: 0.5854
 model_path: weights/finetuned/eva02_catboost.cbm
-model_threshold: 0.5078
+model_threshold: 0.4034
 rank_threshold: null
 k: 10
 with_embeddings: true

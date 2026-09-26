@@ -1,11 +1,13 @@
-# EVA02 labeled-only K=4 camera-diverse 35-epoch 35-epoch nested 5-fold inner-CV mean contest (0.7 F1 + 0.3 TNR) CatBoost P(match exists).
-# This is the Docker / serving accept rule. Fit on 20% identity-hold-out eval packs; the head still trains on 50/50 pairs.
+# MAD-Cars full pretrain → competition fine-tune (madcars_full_ft_ep35) nested 5-fold
+# inner-CV mean contest (0.7 F1 + 0.3 TNR) CatBoost P(match exists).
+# Nested contest: CatBoost 0.862, cosine 0.857, ensemble 0.863 — Docker serves ensemble.
+# Fit on 20% identity-hold-out eval packs; the head still trains on 50/50 pairs.
 # Contest F1/TNR are micro over the query set; organizers do not re-threshold confidence.
-# Including a query_id in candidates.csv is the accept decision (P >= 0.5078).
+# Including a query_id in candidates.csv is the accept decision (P >= 0.4034).
 kind: model
 cosine_threshold: null
 model_path: weights/finetuned/eva02_catboost.cbm
-model_threshold: 0.5078
+model_threshold: 0.4034
 rank_threshold: null
 k: 10
 with_embeddings: true
