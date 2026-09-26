@@ -22,6 +22,7 @@ from dataset.pretrain import (
     SSL_SOURCE,
     PretrainDataModule,
     load_external_data,
+    read_madcars,
     read_test_train_ssl,
     read_veri,
     read_vric,
@@ -80,9 +81,16 @@ def test_pretrain_config_composes():
         version_base="1.3", config_dir=str(Path(__file__).resolve().parents[1] / "configs")
     ):
         cfg = compose(config_name="pretrain", overrides=["experiment=smoke"])
+        serving_pretrain = compose(
+            config_name="pretrain",
+            overrides=["experiment=current_best_tuned_madcars_full", "pretrain.datasets=[madcars_full]"],
+        )
     assert list(cfg.pretrain.datasets) == ["veri", "vric"]
     assert cfg.pretrain.validation_csv == cfg.data.train_csv
     assert cfg.init_checkpoint is None
+    assert serving_pretrain.model.backend == "llm2clip"
+    assert serving_pretrain.pretrain.madcars_full.root == "extra_data/madcars"
+    assert serving_pretrain.augmentation.transforms[2].params.shear.y == [-12, -4]
 
 
 def test_current_best_tuned_matches_eva02_oof():
@@ -172,6 +180,40 @@ def test_external_reader_errors(tmp_path):
     with pytest.raises(ValueError, match="expected image, identity, camera"):
         read_vric(empty_vric)
 
+    with pytest.raises(FileNotFoundError, match="Incomplete MAD-Cars"):
+        read_madcars(tmp_path / "missing-madcars")
+    madcars = tmp_path / "madcars"
+    (madcars / "images").mkdir(parents=True)
+    (madcars / "meta").mkdir()
+    pd.DataFrame(
+        {"car_id": pd.Series(dtype=int), "view_id": pd.Series(dtype=int)}
+    ).to_csv(madcars / "meta/subsample.csv", index=False)
+    with pytest.raises(ValueError, match="MAD-Cars annotations are empty"):
+        read_madcars(madcars)
+
+
+def test_madcars_reader_and_full_subsample(data_cfg, tmp_path):
+    root = tmp_path / "madcars"
+    write_image(root / "images/12/1.jpg")
+    write_image(root / "images/12/2.jpg")
+    meta = pd.DataFrame({"car_id": [12, 12, 12], "view_id": [1, 1, 2]})
+    (root / "meta").mkdir()
+    meta.to_csv(root / "meta/subsample.csv", index=False)
+    meta.to_csv(root / "meta/subsample20.csv", index=False)
+    frame = read_madcars(root)
+    assert frame.image_id.tolist() == ["madcars:12_1", "madcars:12_2"]
+    assert frame.identity_key.tolist() == ["madcars:12", "madcars:12"]
+    assert frame.camera_key.tolist() == ["madcars:v1", "madcars:v2"]
+    assert frame.full_image.all()
+    cfg = attach_pretrain(data_cfg, tmp_path)
+    with open_dict(cfg):
+        cfg.pretrain.madcars = {"root": str(root)}
+        cfg.pretrain.madcars_full = {"root": str(root)}
+    cfg.pretrain.datasets = ["madcars_full"]
+    assert load_external_data(cfg).image_id.tolist() == frame.image_id.tolist()
+    cfg.pretrain.datasets = ["madcars"]
+    assert load_external_data(cfg).source.tolist() == ["madcars", "madcars"]
+
 
 def test_load_external_data_mix_and_guards(data_cfg, tmp_path, monkeypatch):
     cfg = attach_pretrain(data_cfg, tmp_path)
@@ -190,7 +232,7 @@ def test_load_external_data_mix_and_guards(data_cfg, tmp_path, monkeypatch):
     cfg.pretrain.datasets = ["veri", "veri"]
     with pytest.raises(ValueError, match="unique dataset names"):
         load_external_data(cfg)
-    cfg.pretrain.datasets = ["madcars"]
+    cfg.pretrain.datasets = ["not_a_dataset"]
     with pytest.raises(ValueError, match="Unknown pretraining datasets"):
         load_external_data(cfg)
 
@@ -465,6 +507,34 @@ def test_pretrain_main_all_paths(data_cfg, tmp_path, monkeypatch):
     )
     with pytest.raises(RuntimeError, match="Validation data was not prepared"):
         pretrain_module.main.__wrapped__(cfg)
+
+
+def test_periodic_last_checkpoint_saves_on_schedule_and_train_end(tmp_path):
+    saved = []
+
+    def save(path):
+        saved.append(Path(path))
+        Path(path).write_text("checkpoint")
+
+    trainer = SimpleNamespace(current_epoch=0, is_global_zero=True, save_checkpoint=save)
+    callback = pretrain_module.PeriodicLastCheckpoint(
+        tmp_path / "checkpoints", every_n_epochs=2, keep_epochs=[1]
+    )
+    callback.on_validation_epoch_end(trainer, None)
+    assert saved == [tmp_path / "checkpoints/milestone_epoch001.ckpt"]
+    trainer.current_epoch = 1
+    callback.on_validation_epoch_end(trainer, None)
+    assert saved[-1] == tmp_path / "checkpoints/last.ckpt"
+    assert saved[-1].read_text() == "checkpoint"
+    trainer.is_global_zero = False
+    callback.on_train_end(trainer, None)
+    assert len(saved) == 3
+    trainer.is_global_zero = True
+    callback.on_train_end(trainer, None)
+    assert len(saved) == 4
+    assert pretrain_module.PeriodicLastCheckpoint(tmp_path, every_n_epochs=0).every == 1
+    with pytest.raises(ValueError, match="positive completed epoch"):
+        pretrain_module.PeriodicLastCheckpoint(tmp_path, every_n_epochs=1, keep_epochs=[0])
 
 
 class InitModule(nn.Module):

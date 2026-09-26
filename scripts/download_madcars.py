@@ -33,8 +33,9 @@ def build_subsample(cars: int, views: int, min_views: int, seed: int, subsample_
     else:
         picked = pd.Series(eligible).sample(n=cars, random_state=seed).tolist()
     parts = []
+    grouped = df.groupby("car_id", sort=False)
     for car_id in picked:
-        rows = df[df.car_id == car_id].sort_values("view_id")
+        rows = grouped.get_group(car_id).sort_values("view_id")
         parts.append(rows.iloc[even_indices(len(rows), views)])
     sub = pd.concat(parts, ignore_index=True)
     subsample_path.parent.mkdir(parents=True, exist_ok=True)

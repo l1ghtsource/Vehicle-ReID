@@ -97,6 +97,7 @@ checkpointing:
   save_top_k: 2
   save_last: false
   last_every_n_epochs: 5
+  keep_epochs: []
 eval:
   split: val
   weights: auto

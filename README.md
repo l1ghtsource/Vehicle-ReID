@@ -15,8 +15,8 @@ flowchart LR
     B --> C["Fine-tune current_best_tuned_madcars_full<br/>GroupKFold CV + tilt augs"]
     C --> D[Mean-stop full retrain 17 ep]
     D --> E[Export weights/finetuned/eva02.pt]
-    D --> F[Open-set refusal branch]
     E --> G[Crop 336 × 336 → 256-D EMA embedding]
+    G --> F[Open-set refusal branch]
     G --> H[Cosine ranking → submission.csv]
     G --> I[embeddings.npy]
     F --> J["Ensemble refusal → candidates.csv"]
@@ -46,8 +46,9 @@ Primary pipeline:
 | --- | ---: | --- |
 | Retrieval, five-fold OOF | **mAP@10 0.892**, mAP 0.900, Rank-1 0.902 | Local identity-disjoint estimate from `runs/cv/madcars_full_ft_ep35` (`cv_metrics.json`). Not a locked test score. |
 | Refusal, nested contest | **0.863** ensemble (cosine 0.857 / CatBoost 0.862) | Nested `0.7 × F1 + 0.3 × TNR` on `madcars_full_ft_ep35` packs; Docker uses `refusal=eva02_ensemble` (cuts 0.5854 / 0.4034). |
-| H200, serving checkpoint | **16.6 ms** batch-1 `extract()`; **532 images/s** at batch 32 | Isolated measurement; first-forward compilation is reported separately. |
+| H200, same architecture | **16.6 ms** batch-1 `extract()`; **532 images/s** at batch 32 | Earlier checkpoint; isolated measurement with first-forward compilation reported separately. |
 | RTX A5000, same architecture | **26.5 ms** batch 1; **133.6 images/s** at batch 32 | Historical measurement with earlier weights; indicative speed for the current weights. CPU and driver differ from the organizers' machine. |
+| RTX 3090, same architecture | **23.7 ms / 119.9 images/s** with compile; **40.5 ms / 73.3 images/s** without | Earlier checkpoint on Vast driver 535.113.01 (advertised CUDA 12.2); see the full profile and compatibility replay below. |
 
 The final Docker image serves the MAD-Cars-pretrained full retrain, its 256-D embeddings, cosine
 ranking, and the cosine∧CatBoost ensemble refusal rule. Research experiments are separated from
@@ -80,9 +81,9 @@ and reproduction steps.
 The image may use the network during `docker build`. `docker run` is fully offline:
 `HF_HUB_OFFLINE=1`, `TRANSFORMERS_OFFLINE=1`, and Compose `network_mode: none`. GPU access is
 `--gpus all` (Compose `gpus: all`). Python packages are
-installed from `requirements/runtime.txt` with `pip install --require-hashes` on public PyPI. That
-file is the frozen export of `uv.lock`; regenerate it with `make lock`. The lab `uv.lock` registry
-URL is not used at image build time.
+installed from `requirements/runtime.txt` with `pip install --require-hashes` on public PyPI.
+That file pins the inference environment; regenerate it with `make lock` when dependency pins
+change. The lab `uv.lock` registry URL is not used at image build time.
 
 The serving `.pt` and `eva02_catboost.cbm` are copied into the image from `weights/finetuned/`. Do not mount a host
 `weights/` directory over `/app/weights`, or the baked files are hidden. Mount only contest data and
@@ -138,7 +139,8 @@ The evaluation directory contains:
 - `submission.csv`: wide top-10 table `query_id,gallery_id_1,...,gallery_id_10`, **no header**. One row per query
   in CSV order, including open-set and refused queries. No `confidence` column. Empty cells and
   skipped queries are invalid here; refusal is not expressed in this file. The demo gallery has 8
-  images, so the example file is 8 columns wide; a full gallery writes 10.
+  images, so its example file has 8 candidates plus the query ID (9 columns); a full gallery writes 10
+  candidates plus the query ID (11 columns).
 - `candidates.csv`: contest accept/refuse file. Columns `query_id,gallery_id,confidence` in that
   order, header required. `confidence` is a monotone similarity score (higher = more confident);
   the range need not be `[0, 1]`. Organizers rank by this value and take the **max-confidence**
@@ -214,7 +216,8 @@ The following list describes supported tools and experiments; the submitted path
 - [Requirements](#requirements) · [Installation](#installation) · [Dataset layout](#dataset-layout)
 - [Data validation and folds](#data-validation-and-folds) · [Configuration](#configuration)
 - [Backbones](#backbones) · [Losses and sampling](#losses-and-sampling) · [Augmentation](#augmentation)
-- [Training](#training) · [Evaluation and retrieval](#evaluation-and-retrieval) · [Open-set refusal](#open-set-refusal)
+- [Pretraining](#pretraining) · [Training](#training) · [Evaluation and retrieval](#evaluation-and-retrieval)
+- [Open-set refusal](#open-set-refusal) · [Export and offline serving weights](#export-and-offline-serving-weights)
 - [Cross-validation](#cross-validation) · [HPO](#hyperparameter-optimization) · [Quality gates](#quality-gates)
 - [Research and optional methods](#research-and-optional-methods) · [Metric board](#metric-board)
 
@@ -458,6 +461,188 @@ Image resizing supports:
 - `pad`: preserve aspect ratio and pad to the configured canvas.
 - `stretch`: resize directly to the configured width and height.
 
+## Pretraining
+
+### Public backbone weights
+
+Download supported external weights on a machine with Hugging Face access:
+
+```bash
+.venv/bin/python scripts/download_weights.py dinov3_base
+.venv/bin/python scripts/download_weights.py dinov3_large
+.venv/bin/python scripts/download_weights.py radio
+.venv/bin/python scripts/download_weights.py llm2clip
+.venv/bin/python scripts/download_weights.py efficientloftr
+```
+
+Copy the resulting `weights/` directory to the training machine and set the corresponding
+`model.checkpoint_path`. Use `model.local_files_only=true` where supported to prevent network
+access. Each download is pinned by file SHA-256 (and a Hub commit for RADIO and LLM2CLIP). A
+checksum mismatch after download is an error.
+
+### External pretraining data
+
+External identity-labeled datasets live under `extra_data/`. MAD-Cars is used in the submitted
+training path; VeRi and VRIC are supported alternatives. The loaders expect:
+
+```text
+extra_data/
+├── VeRi/
+│   ├── image_train/
+│   └── train_label.xml
+├── VRIC/
+│   ├── train_images/
+│   └── vric_train.txt
+└── madcars/
+    ├── images/<car_id>/<view_id>.jpg
+    ├── meta/mad.csv
+    └── meta/subsample20.csv
+```
+
+VeRi uses `image_train/` plus `train_label.xml`. Source:
+[VeRi-776 on Kaggle](https://www.kaggle.com/datasets/abhyudaya12/veri-vehicle-re-identification-dataset)
+([CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)).
+
+VRIC uses `train_images/` plus `vric_train.txt` lines of `image identity camera`. Source:
+[VRIC](https://qmul-vric.github.io/). The images are derived from [UA-DETRAC](https://detrac-db.rit.albany.edu/).
+
+MAD-Cars uses `images/<car_id>/<view_id>.jpg` plus a `meta/*.csv` with `car_id,view_id` rows.
+Source: [yandex/mad-cars on Hugging Face](https://huggingface.co/datasets/yandex/mad-cars)
+(introduced by [MADrive](https://arxiv.org/abs/2506.21520),
+[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)). It is a large-scale
+collection of ~70k car instances with ~85 views each at up to 1920×1080; we use a working subsample
+(~1.4M images, 20 views per car) downloaded with `scripts/download_madcars.py` and listed in
+`extra_data/madcars/meta/subsample20.csv`. Views are shot handheld at ground level, so pretraining
+uses a view-from-above tilt augmentation (`configs/augmentation/reid_tilt.yaml`) to bridge the
+domain shift to the competition cameras (see below).
+
+The three datasets are public research sources; check each source's license before reuse.
+VeRi is CC BY-NC 4.0 and MAD-Cars is CC BY-NC-SA 4.0.
+That matches the task statement: public
+pretrained weights and third-party open datasets are allowed and encouraged, while closed,
+proprietary, or unreproducible data are not. List these sources in the solution README when a
+pretrained checkpoint is submitted. Do not copy `extra_data/` into the submission; keep the
+datasets reproducible from the original downloads.
+
+VeRi and VRIC images are already cropped, so pretraining does not apply competition bounding boxes.
+MAD-Cars instances are full frames with the car as the subject, which `full_image: True` handles.
+For MAD-Cars pretraining, `view_id` is a proxy used by camera-diverse sampling; fine-tuning uses
+the competition's actual `camera_id`.
+
+#### View-from-above tilt augmentation
+
+MAD-Cars views are handheld at ground level, while competition cameras look at vehicles slightly
+from above. Pretraining with `configs/augmentation/reid_tilt.yaml` simulates that viewpoint with an
+`Affine` shear (`y=[-12,-4]`, `p=0.3`) plus a light `Perspective` (`p=0.15`) on top of the tuned
+`current_best_tuned` transforms:
+
+![MAD-Cars view (left) and the same view with the tilt augmentation (right)](notebooks/eva02/readme_figs/madcars_tilt_example.jpg)
+
+Screening on a 20k-car × 10-view MAD-Cars subsample (3-fold OOF, otherwise identical recipe) shows
+the tilt is worth about +1.2 mAP points on the CV pass after pretraining:
+
+| MAD-Cars 20k pretrain | mAP | mAP@10 | Rank-1 |
+| --- | ---: | ---: | ---: |
+| without tilt (`madcars_default`) | 0.8658 | 0.8562 | 0.8627 |
+| with tilt (`madcars_tilt`) | **0.8774** | **0.8683** | **0.8757** |
+
+The full-data run uses the tilt recipe on ~1.4M images; its checkpoint-by-checkpoint 5-fold OOF is
+in the metric board below.
+
+### MAD-Cars pretraining
+
+`pretrain.py` trains on 100% of one or more extra datasets and validates against 100% of the
+competition `train.csv` query/gallery split. Use this to produce a backbone/head checkpoint that
+can initialize ordinary competition training.
+
+The full MAD-Cars pretrain needs the public `mad.csv` URL manifest first. The image downloader
+does **not** download that manifest. Fetch it, then select and download the 20-view subset used
+by the `madcars_full` reader:
+
+```bash
+mkdir -p extra_data/madcars/meta
+.venv/bin/hf download yandex/mad-cars mad.csv --repo-type dataset \
+  --revision 3fa6f91824d0164029908d7953a1b0483adc38ba \
+  --local-dir extra_data/madcars/meta
+.venv/bin/python scripts/download_madcars.py \
+  --cars 0 --views 20 --min-views 4 \
+  --dataset madcars --subsample-name subsample20.csv
+```
+
+`--cars 0` selects every eligible car; interrupted downloads can be rerun against the same
+subsample CSV. The pretrain launcher `scripts/run_madcars_full_pretrain.sh` downloads nothing and
+expects the resulting `extra_data/madcars/` tree. It uses
+[`current_best_tuned_madcars_full`](configs/experiment/current_best_tuned_madcars_full.yaml)
+(LLM2CLIP with `reid_tilt`) and the `madcars_full` reader backed by
+`meta/subsample20.csv`. The script uses the same model/head architecture as the later fine-tune
+and retains the completed epoch-7 checkpoint as `milestone_epoch007.ckpt`, independently of the
+two best monitored checkpoints. Export that EMA state for every competition fold and the full
+retrain (set `PRETRAIN_RUN` to the timestamped output directory of the run you intend to use):
+
+```bash
+PRETRAIN_RUN=$(ls -dt runs/pretrain/madcars_full/*/ | head -1)
+.venv/bin/python scripts/export_serving.py \
+  --checkpoint "${PRETRAIN_RUN%/}/checkpoints/milestone_epoch007.ckpt" \
+  --output runs/pretrain/madcars_full_pretrain_ep7/checkpoints/madcars_full_pretrain_ep7.pt \
+  --weights ema
+```
+
+### VeRi, VRIC, and SSL alternatives
+
+Train on VeRi, VRIC, MAD-Cars, or a combination. `scripts/pretrain.sh` selects the GPU, Hydra model group, extra
+datasets, and experiment recipe. It defaults to `experiment=current_best_tuned` and local
+`weights/` checkpoints:
+
+```bash
+scripts/pretrain.sh cuda:2 dinov3_convnext_base veri
+scripts/pretrain.sh cuda:2 llm2clip vric
+scripts/pretrain.sh 2 dinov3_convnext_base veri,vric
+scripts/pretrain.sh cuda:2 radio both smoke
+scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_crop
+scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_full
+```
+
+The first argument is `cuda:N` or `N`. The second is the Hydra model group. The third is `veri`,
+`vric`, `veri,vric`, `both`, `test_train_ssl_crop`, or `test_train_ssl_full` (`test_train_ssl` is a
+crop alias). An optional fourth token without `=` is the experiment name; otherwise extra tokens are
+Hydra overrides. LLM2CLIP is forced to 336 × 336 and `local_parts=0`. SSL replaces the experiment
+loss with DINOv3-style DINO/iBOT/KoLeo/Gram and sets `data.sampler.kind=random`. Set
+`EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaults.
+
+Direct Hydra remains available:
+
+```bash
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[veri]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
+  pretrain.datasets=[test_train_ssl_crop]
+.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
+  pretrain.datasets=[test_train_ssl_full]
+.venv/bin/python pretrain.py experiment=current_best_tuned_madcars_full model=llm2clip \
+  pretrain.datasets=[madcars_full] name=madcars_full
+```
+
+The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
+not collide. Outputs include the usual Lightning checkpoints plus `run_summary.json` with dataset
+names, image counts, and checkpoint paths.
+
+Initialize a competition fold from the pretrain checkpoint. Keep the model, pooling, and embedding
+head the same. Do not use `resume` for this transfer: pretraining uses a different identity space
+and data fingerprint, so `train.py` would reject that checkpoint.
+
+```bash
+.venv/bin/python train.py \
+  experiment=current_best_tuned \
+  init_checkpoint=runs/pretrain/llm2clip_veri/<run>/checkpoints/<ckpt>.ckpt \
+  data.fold=0
+```
+
+`init_checkpoint` loads `model.*` weights only. A serving `.pt` (`format=reid-serving`) is accepted;
+EMA shadows from a Lightning checkpoint are used when `validation_weights=ema`. Losses and classifiers
+are created for the competition identity count, so the DINO prototype head is not transferred.
+`mask_token` may be absent from a non-SSL serving payload. `resume` and `init_checkpoint` cannot be
+set together.
+
 ## Training
 
 Run the small smoke configuration:
@@ -494,9 +679,10 @@ camera-diverse sampling, **tilt** augmentations (`reid_tilt`), ArcFace+AdaSP
 (`runs/cv/madcars_full_ft_ep35`): mAP **0.900**, mAP@10 **0.892**, Rank-1 **0.902**
 (`cv_metrics.json`). Mean best-stop full retrain uses **17** epochs.
 
-MAD-Cars pretrain is part of the submitted path (not only a research appendix). Download MAD-Cars
-with `scripts/download_madcars.py`, then run `scripts/run_madcars_full_pretrain.sh` /
-`experiment=current_best_tuned_full` with `reid_tilt` on `madcars_full`
+MAD-Cars pretrain is part of the submitted path (not only a research appendix). Prepare MAD-Cars
+with the metadata and image commands in [Pretraining](#pretraining), then run
+`scripts/run_madcars_full_pretrain.sh` using
+`experiment=current_best_tuned_madcars_full` and `madcars_full`
 (`extra_data/madcars/meta/subsample20.csv`). Views are handheld at ground level; tilt
 (`Affine` shear + light `Perspective`) bridges to competition cameras. Screening on a 20k-car
 subsample showed about +1.2 mAP after pretrain with tilt vs without. Export the ep7 EMA
@@ -707,8 +893,8 @@ with gallery size, not with the embedding model. `profiling/` reproduces that pr
 Throughput in the notebook now uses that DataLoader, not a private ThreadPool. `profiling/` is still
 not copied into the image; Docker already has `dataset/` and `modules/inference.py`. When
 `eval.tta.enabled` is true, the timed `extract()` path averages the same views as `eval.py`:
-scales, rotations, flips, and every `eval.tta.context_pcts` crop. The published serving-checkpoint
-numbers use TTA off, so they are unchanged.
+scales, rotations, flips, and every `eval.tta.context_pcts` crop. The hardware tables below use
+TTA off and earlier exports of the same embedding architecture.
 
 - `latency_b1`: median of 300 timed batch-1 cycles after 50 warmups, with CUDA synchronize before
   and after every timed sample. This stays sequential `extract()` because that is the organizer
@@ -742,7 +928,7 @@ checked in source at the final review, not by the launch format.
 
 [inference_profile.ipynb](notebooks/eva02/inference_profile.ipynb) charts stage costs, latency, FPS vs batch, VRAM, the
 weight inventory against the 2 GiB cap, and these performance scores. Isolated H200 (`cuda:2`,
-TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.08):
+TTA off, bf16, earlier `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.08):
 
 | Metric | Value |
 | --- | --- |
@@ -762,7 +948,7 @@ TTA off, bf16, serving `eva02.pt`, torch 2.8.0+cu128 / CUDA 12.8, driver 575.57.
 
 ![H200 peak VRAM vs batch](notebooks/eva02/readme_figs/inference_vram.png)
 
-*Contest `extract()` profile on isolated H200 for serving `eva02.pt`. Notebook:
+*Contest `extract()` profile on isolated H200 for the earlier EVA02 export. Notebook:
 [inference_profile.ipynb](notebooks/eva02/inference_profile.ipynb).*
 
 Additional RTX A5000 profile: [executed notebook](notebooks/eva02/inference_profile_a5000.ipynb)
@@ -827,6 +1013,38 @@ candidates **byte-identical** to the earlier explicit-`false` run. The ranking c
 yet been scored against labeled validation, so mAP@10 and refusal effects remain unknown. The built image
 still needs a `docker run --gpus all --network none` check on a Docker-capable GPU host.
 
+The third profile was run on a Vast.ai **RTX 3090, driver 535.113.01 (advertised maximum CUDA
+12.2)**, with torch 2.8.0+cu128, bf16, TTA off, eight DataLoader workers, and
+`eval.fast_kernels=false`. It used an earlier `eva02.pt` of the same architecture, so these are
+hardware and kernel measurements, not a measurement of the newly exported MAD-Cars weights.
+Both modes used 50 warmups, 300 synchronized batch-1 `extract()` cycles and at least 10 seconds
+per throughput batch. [Compiled raw report](notebooks/eva02/inference_profile_3090_figs/report_compiled.json)
+and [eager raw report](notebooks/eva02/inference_profile_3090_figs/report_eager.json) retain
+the per-sample timings and weight inventory.
+
+| Metric | RTX 3090, `torch.compile` | RTX 3090, eager |
+| --- | ---: | ---: |
+| Batch-1 `extract()` latency | **23.7 ms** p50; p90 24.2, p99 29.5 ms | **40.5 ms** p50; p90 42.1, p99 45.4 ms |
+| DataLoader throughput, b1 / b8 / b16 / b32 | 63.3 / 111.7 / 117.5 / **119.9 FPS** | 31.8 / 68.4 / 71.3 / **73.3 FPS** |
+| Peak PyTorch allocated VRAM at b32 | **1.18 GiB** | **2.64 GiB** |
+| Weight load / first `extract()` | 4.38 s / **31.59 s** | 3.34 s / **0.30 s** |
+| Calculated performance under published thresholds | **0.200 / 0.200** | **0.145 / 0.200** |
+| Two extracts in one process | Bit-identical | Bit-identical |
+
+The compile-first-forward cost is excluded from the scored warm `extract()` latency but is paid
+by a fresh container. A clean Dockerfile-equivalent replay on this same host installed `gcc`
+into `pytorch/pytorch:2.8.0-cuda12.8-cudnn9-runtime`, installed the runtime requirements, then
+ran the legacy Docker entrypoint with compilation on and an empty cache. It completed in
+**129.2 s** and wrote a headerless 1,110 × 11 `submission.csv`, finite 1,860 × 256
+`embeddings.npy`, and 10,600 candidate rows (1,060 accepted queries). The
+[replay log](notebooks/eva02/inference_profile_3090_figs/dockerfile_replay.log) records the
+runtime result. This replay used the earlier checkpoint and `refusal=model`; the current Docker
+default is `refusal=eva02_ensemble`. Vast did not allow Docker-in-Docker, so this was a clean
+replay **inside a container**, not `docker build` followed by `docker run` of the submitted image.
+It demonstrates that this CUDA 12.8 userspace, the compiled forward, and the entrypoint ran on
+one driver advertising CUDA 12.2. It does not reproduce the organizers' RTX A5000 / Xeon host
+or establish that every CUDA 12.2 driver accepts the image.
+
 Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inference_model`):
 
 - Fused SDPA after RoPE (`model.attn_kernel=sdpa`). Math vs SDPA embeddings were bit-identical.
@@ -841,9 +1059,9 @@ Serving kernels (`models/kernels.py`, applied by `eval.py` via `prepare_inferenc
   has to crop and normalize tensors in the main process, not inside workers. An optional ONNX →
   TensorRT backend is documented below.
 
-The container is `pytorch/pytorch:2.8.0-cuda12.8`. Organizers list a CUDA **12.2** driver. That gap
-does not by itself prove incompatibility, but NVIDIA documents limits on minor CUDA compatibility;
-the image has to be run on that driver, not assumed safe.
+The container is `pytorch/pytorch:2.8.0-cuda12.8`. The 3090 replay above is the available
+CUDA 12.2 driver check; the exact organizer driver version and a built-image run there remain
+unverified.
 
 ![extract() stage breakdown after warmup](notebooks/eva02/readme_figs/inference_stages.png)
 
@@ -852,7 +1070,7 @@ the image has to be run on that driver, not assumed safe.
 
 ![Sustained extract() FPS vs batch](notebooks/eva02/readme_figs/inference_throughput.png)
 
-*DataLoader `extract_frame` throughput on the K=4 camera-diverse serving file. Best is 532 FPS at batch 32.*
+*DataLoader `extract_frame` throughput on the earlier K=4 camera-diverse export. Best is 532 FPS at batch 32.*
 
 The contest payload is `weights/finetuned/eva02.pt` (EMA tensors plus the saved Hydra cfg). A
 training Lightning `.ckpt` is not submitted: export it with `scripts/export_serving.py`. The
@@ -978,22 +1196,7 @@ rank-average across the test query batch.
 [refusal_analysis.ipynb](notebooks/eva02/refusal_analysis.ipynb) compares the heads and ensembles on EVA02 5-fold OOF.
 [inference_profile.ipynb](notebooks/eva02/inference_profile.ipynb) measures contest `extract()` latency (16.6 ms) and DataLoader throughput (532 FPS at batch 32) on isolated H200.
 
-## Pretrained weights and offline use
-
-Download supported external weights on a machine with Hugging Face access:
-
-```bash
-.venv/bin/python scripts/download_weights.py dinov3_base
-.venv/bin/python scripts/download_weights.py dinov3_large
-.venv/bin/python scripts/download_weights.py radio
-.venv/bin/python scripts/download_weights.py llm2clip
-.venv/bin/python scripts/download_weights.py efficientloftr
-```
-
-Copy the resulting `weights/` directory to the training machine and set the corresponding
-`model.checkpoint_path`. Use `model.local_files_only=true` where supported to prevent network
-access. Each download is pinned by file SHA-256 (and a Hub commit for RADIO and LLM2CLIP). A
-checksum mismatch after download is an error.
+## Export and offline serving weights
 
 Contest serving weights are not these Hub snapshots. Export EMA tensors from a Lightning training
 checkpoint into a compact `.pt`, fit CatBoost on that checkpoint's embeddings (`--full-retrain`) or
@@ -1250,8 +1453,8 @@ environment as `make lint`.
 
 ## Reproducibility and safety
 
-- Python and core ML dependency versions are pinned exactly in `pyproject.toml`, `uv.lock`, and
-  hashed `requirements/runtime.txt`.
+- Direct Python dependencies are pinned in `pyproject.toml`; the Docker image installs a hashed
+  `requirements/runtime.txt`.
 - Finetuned serving weights under `weights/finetuned/` are Git LFS objects with `SHA256SUMS`.
 - Fold generation is deterministic for a fixed annotation file, seed, and fold count.
 - Data fingerprints are persisted and checked when folds or checkpoints are reused.
@@ -1266,7 +1469,7 @@ environment as `make lint`.
 augmentations/  Config-driven image augmentation pipeline
 configs/        Hydra model, loss, optimizer, scheduler, refusal, and experiment presets
 dataset/        Annotation validation, folds, datasets, data module, pretrain loaders, and samplers
-extra_data/     Optional external identity-labeled crops for pretraining
+extra_data/     External identity-labeled datasets for pretraining (MAD-Cars in the serving recipe)
 models/         Backbone adapters, pooling, embedding model, and inference kernels (SDPA / compile)
 modules/        Lightning module, losses, metrics, inference, optimization, and regularization
 interp/         Embedding attribution: cosine Grad-Sim, Grad-Attention rollout, patch occlusion, CAM, Chefer
@@ -1289,70 +1492,7 @@ eval.py         Serving `.pt` / Lightning checkpoint evaluation and retrieval en
 
 ## Research and optional methods
 
-### External pretraining data
-
-Optional identity-labeled crops live under `extra_data/`. The current loaders are:
-
-```text
-extra_data/
-├── VeRi/
-│   ├── image_train/
-│   └── train_label.xml
-├── VRIC/
-│   ├── train_images/
-│   └── vric_train.txt
-└── madcars/
-    ├── images/<car_id>/<view_id>.jpg
-    └── meta/subsample.csv
-```
-
-VeRi uses `image_train/` plus `train_label.xml`. Source:
-[VeRi-776 on Kaggle](https://www.kaggle.com/datasets/abhyudaya12/veri-vehicle-re-identification-dataset)
-([CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/)).
-
-VRIC uses `train_images/` plus `vric_train.txt` lines of `image identity camera`. Source:
-[VRIC](https://qmul-vric.github.io/). The images are derived from [UA-DETRAC](https://detrac-db.rit.albany.edu/).
-
-MAD-Cars uses `images/<car_id>/<view_id>.jpg` plus a `meta/*.csv` with `car_id,view_id` rows.
-Source: [yandex/mad-cars on Hugging Face](https://huggingface.co/datasets/yandex/mad-cars)
-(introduced by [MADrive](https://arxiv.org/abs/2506.21520),
-[CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)). It is a large-scale
-collection of ~70k car instances with ~85 views each at up to 1920×1080; we use a working subsample
-(~1.4M images, 20 views per car) downloaded with `scripts/download_madcars.py` and listed in
-`extra_data/madcars/meta/subsample20.csv`. Views are shot handheld at ground level, so pretraining
-uses a view-from-above tilt augmentation (`configs/augmentation/reid_tilt.yaml`) to bridge the
-domain shift to the competition cameras (see below).
-
-Both datasets are public academic ReID benchmarks. Their bundled terms are research-only: attribution
-is required, redistribution and commercial use are not. MAD-Cars adds share-alike (CC BY-NC-SA 4.0).
-That matches the task statement: public
-pretrained weights and third-party open datasets are allowed and encouraged, while closed,
-proprietary, or unreproducible data are not. List these sources in the solution README when a
-pretrained checkpoint is submitted. Do not copy `extra_data/` into the submission; keep the
-datasets reproducible from the original downloads.
-
-VeRi and VRIC images are already cropped, so pretraining does not apply competition bounding boxes.
-MAD-Cars instances are full frames with the car as the subject, which `full_image: True` handles.
-
-#### View-from-above tilt augmentation
-
-MAD-Cars views are handheld at ground level, while competition cameras look at vehicles slightly
-from above. Pretraining with `configs/augmentation/reid_tilt.yaml` simulates that viewpoint with an
-`Affine` shear (`y=[-12,-4]`, `p=0.3`) plus a light `Perspective` (`p=0.15`) on top of the tuned
-`current_best_tuned` transforms:
-
-![MAD-Cars view (left) and the same view with the tilt augmentation (right)](notebooks/eva02/readme_figs/madcars_tilt_example.jpg)
-
-Screening on a 20k-car × 10-view MAD-Cars subsample (3-fold OOF, otherwise identical recipe) shows
-the tilt is worth about +1.2 mAP points on the CV pass after pretraining:
-
-| MAD-Cars 20k pretrain | mAP | mAP@10 | Rank-1 |
-| --- | ---: | ---: | ---: |
-| without tilt (`madcars_default`) | 0.8658 | 0.8562 | 0.8627 |
-| with tilt (`madcars_tilt`) | **0.8774** | **0.8683** | **0.8757** |
-
-The full-data run uses the tilt recipe on ~1.4M images; its checkpoint-by-checkpoint 5-fold OOF is
-in the metric board below.
+### Self-supervised pretraining (explored, not serving)
 
 `pretrain.datasets=[test_train_ssl_crop]` (alias `test_train_ssl`) is unlabeled DINOv3-style
 pretraining on every competition **crop**: `train.csv` plus `test_query.csv` plus `test_gallery.csv`.
@@ -1368,74 +1508,7 @@ rejected, and SSL `pretrain.py` sets `ibot_weight=0` so those runs keep DINO + K
 LLM2CLIP stays at two independently augmented 336×336 global views because EVA02 RoPE
 is locked. Prototype heads are discarded at `init_checkpoint`. Validation is still the labeled
 `train.csv` query/gallery split; that monitor is in-sample for the train half. Do not mix SSL
-sources with VeRi/VRIC.
-
-### External pretraining
-
-`pretrain.py` trains on 100% of one or more extra datasets and validates against 100% of the
-competition `train.csv` query/gallery split. Use this to produce a backbone/head checkpoint that
-can initialize ordinary competition training.
-
-Train on VeRi, VRIC, MAD-Cars, or a combination. `scripts/pretrain.sh` selects the GPU, Hydra model group, extra
-datasets, and experiment recipe. It defaults to `experiment=current_best_tuned` and local
-`weights/` checkpoints:
-
-```bash
-scripts/pretrain.sh cuda:2 dinov3_convnext_base veri
-scripts/pretrain.sh cuda:2 llm2clip vric
-scripts/pretrain.sh 2 dinov3_convnext_base veri,vric
-scripts/pretrain.sh cuda:2 radio both smoke
-scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_crop
-scripts/pretrain.sh cuda:2 llm2clip test_train_ssl_full
-```
-
-The full MAD-Cars pretrain runs `scripts/run_madcars_full_pretrain.sh`, which downloads nothing but
-expects `extra_data/madcars/` from `scripts/download_madcars.py` and trains
-`experiment=current_best_tuned_full` (LLM2CLIP, `reid_tilt` augmentation) on `madcars_full`.
-`configs/experiment/current_best_tuned_full.yaml` is the `current_best_tuned` recipe pointed at
-the full MAD-Cars reader (`dataset/pretrain.py` reader `madcars_full`, subsample
-`meta/subsample20.csv`).
-
-The first argument is `cuda:N` or `N`. The second is the Hydra model group. The third is `veri`,
-`vric`, `veri,vric`, `both`, `test_train_ssl_crop`, or `test_train_ssl_full` (`test_train_ssl` is a
-crop alias). An optional fourth token without `=` is the experiment name; otherwise extra tokens are
-Hydra overrides. LLM2CLIP is forced to 336 × 336 and `local_parts=0`. SSL replaces the experiment
-loss with DINOv3-style DINO/iBOT/KoLeo/Gram and sets `data.sampler.kind=random`. Set
-`EXPERIMENT`, `MODEL_CHECKPOINT`, `NAME`, or `PYTHON` to override the defaults.
-
-Direct Hydra remains available:
-
-```bash
-.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[veri]
-.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip pretrain.datasets=[vric]
-.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
-  pretrain.datasets=[test_train_ssl_crop]
-.venv/bin/python pretrain.py experiment=current_best_tuned model=llm2clip \
-  pretrain.datasets=[test_train_ssl_full]
-.venv/bin/python pretrain.py experiment=current_best_tuned_full model=llm2clip \
-  pretrain.datasets=[madcars_full] name=madcars_full
-```
-
-The default config mixes VeRi and VRIC. Identity and camera IDs are remapped so mixed sources do
-not collide. Outputs include the usual Lightning checkpoints plus `run_summary.json` with dataset
-names, image counts, and checkpoint paths.
-
-Initialize a competition fold from the pretrain checkpoint. Keep the model, pooling, and embedding
-head the same. Do not use `resume` for this transfer: pretraining uses a different identity space
-and data fingerprint, so `train.py` would reject that checkpoint.
-
-```bash
-.venv/bin/python train.py \
-  experiment=current_best_tuned \
-  init_checkpoint=runs/pretrain/llm2clip_veri/<run>/checkpoints/<ckpt>.ckpt \
-  data.fold=0
-```
-
-`init_checkpoint` loads `model.*` weights only. A serving `.pt` (`format=reid-serving`) is accepted;
-EMA shadows from a Lightning checkpoint are used when `validation_weights=ema`. Losses and classifiers
-are created for the competition identity count, so the DINO prototype head is not transferred.
-`mask_token` may be absent from a non-SSL serving payload. `resume` and `init_checkpoint` cannot be
-set together.
+sources with identity-labeled external datasets.
 
 ### Zero-shot pretrained probe
 

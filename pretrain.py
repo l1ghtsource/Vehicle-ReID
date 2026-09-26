@@ -43,21 +43,26 @@ def apply_ssl_pretrain(cfg) -> None:
 
 
 class PeriodicLastCheckpoint(Callback):
-    def __init__(self, dirpath: Path, every_n_epochs: int):
+    def __init__(self, dirpath: Path, every_n_epochs: int, keep_epochs=()):
         self.dirpath = Path(dirpath)
         self.every = max(1, int(every_n_epochs))
+        self.keep_epochs = frozenset(int(epoch) for epoch in keep_epochs)
+        if any(epoch < 1 for epoch in self.keep_epochs):
+            raise ValueError("checkpointing.keep_epochs must contain positive completed epoch counts")
 
-    def _save(self, trainer) -> None:
-        if trainer.is_global_zero:
-            self.dirpath.mkdir(parents=True, exist_ok=True)
-            trainer.save_checkpoint(self.dirpath / "last.ckpt")
+    def _save(self, trainer, filename: str) -> None:
+        self.dirpath.mkdir(parents=True, exist_ok=True)
+        trainer.save_checkpoint(self.dirpath / filename)
 
     def on_validation_epoch_end(self, trainer, pl_module) -> None:
-        if (trainer.current_epoch + 1) % self.every == 0:
-            self._save(trainer)
+        completed = trainer.current_epoch + 1
+        if completed % self.every == 0:
+            self._save(trainer, "last.ckpt")
+        if completed in self.keep_epochs:
+            self._save(trainer, f"milestone_epoch{completed:03d}.ckpt")
 
     def on_train_end(self, trainer, pl_module) -> None:
-        self._save(trainer)
+        self._save(trainer, "last.ckpt")
 
 
 @hydra.main(version_base="1.3", config_path="configs", config_name="pretrain")
@@ -103,7 +108,9 @@ def main(cfg):
         save_last=False,
         auto_insert_metric_name=False,
     )
-    last_checkpoint_cb = PeriodicLastCheckpoint(ckpt_dir, cfg.checkpointing.last_every_n_epochs)
+    last_checkpoint_cb = PeriodicLastCheckpoint(
+        ckpt_dir, cfg.checkpointing.last_every_n_epochs, cfg.checkpointing.keep_epochs
+    )
     if args["devices"] != 1 and args["strategy"] == "auto":
         args["strategy"] = "ddp_find_unused_parameters_true"
     trainer = L.Trainer(
