@@ -89,6 +89,14 @@ The serving `.pt` and `eva02_catboost.cbm` are copied into the image from `weigh
 `weights/` directory over `/app/weights`, or the baked files are hidden. Mount only contest data and
 the output directory:
 
+If `git lfs pull` fails or leaves pointer files instead of weights, download `eva02.pt` and
+`eva02_catboost.cbm` from [the released model repository](https://huggingface.co/lightsource/eva_mad_model)
+and place them manually at `weights/finetuned/eva02.pt` and
+`weights/finetuned/eva02_catboost.cbm`. Keep the repository's `weights/finetuned/SHA256SUMS`
+alongside them. If Python 3 is available on the host, check the files with
+`python3 scripts/verify_weights.py --root weights/finetuned`; the Docker build runs the same
+checksum check in any case.
+
 ```bash
 docker compose build
 DATA_ROOT=./data OUTPUT_DIR=./runs/submission docker compose run --rm retrieval
@@ -514,7 +522,9 @@ collection of ~70k car instances with ~85 views each at up to 1920×1080; we use
 (~1.4M images, 20 views per car) downloaded with `scripts/download_madcars.py` and listed in
 `extra_data/madcars/meta/subsample20.csv`. Views are shot handheld at ground level, so pretraining
 uses a view-from-above tilt augmentation (`configs/augmentation/reid_tilt.yaml`) to bridge the
-domain shift to the competition cameras (see below).
+domain shift to the competition cameras (see below). License plates in the MAD-Cars images used
+for pretraining are already blurred, as in the competition data; we do not recover plate text or
+apply a separate license-plate recognition step.
 
 The three datasets are public research sources; check each source's license before reuse.
 VeRi is CC BY-NC 4.0 and MAD-Cars is CC BY-NC-SA 4.0.

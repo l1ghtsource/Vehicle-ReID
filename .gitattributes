@@ -1,3 +1,4 @@
 weights/finetuned/** filter=lfs diff=lfs merge=lfs -text
 weights/finetuned/SHA256SUMS -filter -diff -merge text
 weights/finetuned/.gitkeep -filter -diff -merge text
+docs/*.pdf binary
